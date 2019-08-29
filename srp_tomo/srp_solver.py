@@ -1,6 +1,6 @@
 import numpy as np
 import raytracer.refraction as rf
-from srp_grid import RandomGrid, WaveBasis
+from . import srp_grid 
 import scipy.sparse.csgraph._shortest_path as sp
 import scipy.spatial.qhull as qhull
 
@@ -57,7 +57,7 @@ def dijkstra_eikonalField_weld(nx, ny, orientations, weld_mask, background, dx,
     cp_weld, m_weld, cg_weld0, _ = rf.calculate_slowness(
         c_weld_temp, rho_weld, 0)
 
-    p_waves = WaveBasis()
+    p_waves = srp_grid.WaveBasis()
     p_waves.set_material_props(c_weld_temp, rho_weld)
     p_waves.calculate_wavespeeds()
     p_waves.define_parent_velo(parent_velo_sq)
@@ -70,7 +70,7 @@ def dijkstra_eikonalField_weld(nx, ny, orientations, weld_mask, background, dx,
 
         nx = orientations.shape[1]
         ny = orientations.shape[0]
-        grid = RandomGrid(nx, ny, cx, cy, dx, spacing, 0.15,
+        grid = srp_grid.RandomGrid(nx, ny, cx, cy, dx, spacing, 0.15,
                           mode=mode)
         grid.generate_realisation(weld_model=orientations, only_weld=False)
         grid.add_mask(weld_mask)

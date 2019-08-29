@@ -1,7 +1,7 @@
 import numpy as np
 #import matlab.engine
 import raytracer.refraction as rf
-from srp_solver import dijkstra_eikonalField_weld
+from . import srp_solver
 import scipy.spatial.qhull as qhull
 from ray_project_orientations import ray_project
 
@@ -173,7 +173,7 @@ def timeOfFlight(tMat, c0, sx, sy, rx, ry, gx, gy, nIts, gradFact, epsTV, eps,
 #     s = 1/tftVel
     s = np.zeros([npx - 1, npy - 1])
     # get distortion for inc field
-    dijk_grid, dist, tMatInc = dijkstra_eikonalField_weld(npx, npy, s.T,
+    dijk_grid, dist, tMatInc = srp_solver.dijkstra_eikonalField_weld(npx, npy, s.T,
                                                           weld_mask, 1/c0, dpx,
                                                           cpx, cpy, sx, sy, rx,
                                                           ry,
@@ -281,7 +281,7 @@ def timeOfFlight(tMat, c0, sx, sy, rx, ry, gx, gy, nIts, gradFact, epsTV, eps,
             # axis image
             # colorbar
             # drawnow
-            _, dist, tMatTest = dijkstra_eikonalField_weld(npx, npy, sTest.T,
+            _, dist, tMatTest = srp_solver.dijkstra_eikonalField_weld(npx, npy, sTest.T,
                                                           weld_mask, 1/c0, dpx,
                                                           cpx, cpy, sx, sy, rx,
                                                           ry,
