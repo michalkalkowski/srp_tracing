@@ -1,12 +1,11 @@
 Metadata-Version: 1.0
-Name: srp-tomo
+Name: srp-tracing
 Version: 0.0.0
-Summary: Shortest ray path weld map tomography
+Summary: Shortest ray path tracing
 Home-page: UNKNOWN
 Author: Michal Kalkowski
 Author-email: m.kalkowski@imperial.ac.uk
 License: MIT
-Description-Content-Type: UNKNOWN
 Description: srp_tomo
         ==============================
         
