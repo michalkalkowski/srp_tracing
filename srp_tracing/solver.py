@@ -1,3 +1,17 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 10 10:49:57 2019
+
+A shortest ray path (SRP) solver for ray tracing in heterogeneous media,
+austenitic stainless steel welds in particular.
+
+Solver functions.
+
+@author: Michal K Kalkowski, m.kalkowski@imperial.ac.uk
+Copyright (C) Michal K Kalkowski (MIT License)
+"""
+
 import numpy as np
 import scipy.sparse.csgraph._shortest_path as sp
 import scipy.spatial.qhull as qhull
