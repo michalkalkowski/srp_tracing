@@ -196,6 +196,7 @@ class RectGrid:
                                        cy + (np.arange(1, ny + 1)
                                        - (ny + 1)/2)*self.pixel_size)
         self.image_grid = np.c_[x_image.flatten(), y_image.flatten()]
+        self.image_tree = cKDTree(self.image_grid)
         gx = -self.pixel_size/2 + np.append(np.unique(self.image_grid[:, 0]),
                                             self.image_grid[-1, 0] +
                                             self.pixel_size)
@@ -286,7 +287,7 @@ class RectGrid:
                 conc = [self.grid_1] + to_add
                 self.grid = np.concatenate(conc, axis=0)
 
-    def calculate_graph(self):
+    def calculate_graph(self, tie_link=[None, None]):
         """
         Defines the connections between the nodes (graph edges) and calculates
         travel times for each edge.
@@ -304,9 +305,15 @@ class RectGrid:
             # identify points within a pixel
             points = self.tree.query_ball_point(self.image_grid[pixel],
                                                 0.501*self.pixel_size*2**0.5)
+            # In case the search circle went outside the pixel, filter out
+            take = (abs(self.grid[points] - self.image_grid[pixel])
+                    <= self.pixel_size/2*1.001).all(axis=1)
+            points = list(np.array(points)[take])
             for point in points:
                 neighbours = points[:]
                 neighbours.remove(point)
+                if len(neighbours) == 0:
+                    break
                 neighbours = np.array(neighbours)
                 dist = (-self.grid[point] + self.grid[neighbours])
                 angles = np.arctan2(dist[:, 1], dist[:, 0])
@@ -328,5 +335,13 @@ class RectGrid:
                 rows.extend(rows_local)
                 cols.extend(list(neighbours[to_take]))
                 edges.extend(edges_local)
+        if tie_link[0] is not None and tie_link[1] is not None:
+            if len(tie_link[0]) == len(tie_link[1]):
+                rows.extend(list(tie_link[0]))
+                cols.extend(list(tie_link[1]))
+                edges.extend([0]*len(tie_link[0]))
+            else:
+                print('Tie link misdefined')
+
         # Create a sparse matrix of graph edge lengths (times of flight)
         self.edges = coo_matrix((edges, (cols, rows))).transpose().tocsr()
