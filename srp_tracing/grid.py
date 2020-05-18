@@ -105,6 +105,7 @@ class WaveBasis:
             slowness_group = np.concatenate((temp[1:][::-1], temp, temp[1:]))
             self.sgp = interpolate.UnivariateSpline(ang2, slowness_group,
                                                     s=0)
+            self.dsgp = self.sgp.derivative(1)
             self.int_my = interpolate.UnivariateSpline(angles, my, s=0)
             self.int_mz = interpolate.UnivariateSpline(angles, mz, s=0)
             self.int_m = interpolate.UnivariateSpline(angles,
@@ -196,7 +197,6 @@ class RectGrid:
                                        cy + (np.arange(1, ny + 1)
                                        - (ny + 1)/2)*self.pixel_size)
         self.image_grid = np.c_[x_image.flatten(), y_image.flatten()]
-        self.image_tree = cKDTree(self.image_grid)
         gx = -self.pixel_size/2 + np.append(np.unique(self.image_grid[:, 0]),
                                             self.image_grid[-1, 0] +
                                             self.pixel_size)
@@ -299,6 +299,7 @@ class RectGrid:
         rows = []
         cols = []
 
+        self.image_tree = cKDTree(self.image_grid)
         self.tree = cKDTree(self.grid)
         self.r_closest = defaultdict(list)
         for pixel in trange(len(self.image_grid)):

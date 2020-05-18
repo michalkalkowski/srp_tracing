@@ -15,6 +15,7 @@ Copyright (C) Michal K Kalkowski (MIT License)
 import numpy as np
 import scipy.sparse.csgraph._shortest_path as sp
 import scipy.spatial.qhull as qhull
+from scipy.spatial import cKDTree
 
 
 def interp_weights(xyz, uvw, d=2):
@@ -157,3 +158,26 @@ class Solver:
                 from_this_source.append(path)
             paths[i] = from_this_source
         return paths
+
+    def calculate_gradient(self, residue, slowness_der=True):
+        paths = calculate_ray_paths(self.grid.grid.target_idx)
+        tree = cKDTree(self.grid.grid.image_grid)
+        grad_proj = np.zeros(self.grid.grid.image_grid.shape[0])
+        for src in trange(len(paths)):
+            for rec in range(len(paths[src])):
+                mid_points = (self.grid.grid[paths[src][rec][1:]] +
+                              self.grid.grid[paths[src][rec][:-1]])/2
+                segments = (self.grid.grid[paths[src][rec][1:]] -
+                            self.grid.grid[paths[src][rec][:-1]])
+                lengths = np.linalg.norm(segments,
+                                         axis=1)
+                _, ind = tree.query(mid_points, k=1)
+                grad_proj[ind] += res[rec, src]*lengths
+                if slowness_der:
+                    ray_angles = np.arctan2(segments[:, 1], segments[:, 0])
+                    orientations = self.grid.property_map[ind]
+                    alpha = (ray_angles - orientations + 2*np.pi) % (2*np.pi)
+                    ds_dalpha = self.grid.materials[1].dgsp(alpha)
+                    grad_proj[ind] *= -ds_alpha
+                
+        return grad_proj
