@@ -127,7 +127,7 @@ test.solve(source_indices=test_grid.source_idx, with_points=False)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target = np.load('../data/tofs_anis_AIC.npy') - 0.75e-6
+target = np.load('../data/SRP_validation_anisotropic.npy')
 target[:32, :32] = np.nan
 
 plt.figure()
