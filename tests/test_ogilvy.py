@@ -112,7 +112,7 @@ test.solve(source_indices=test_grid.source_idx, with_points=True)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target = np.load('../data/tofs_ogilvy_AIC.npy')
+target = np.load('../references/FE_models/results/SRP_validation_ogilvy.npy')
 target[:32, :32] = np.nan
 
 plt.figure()

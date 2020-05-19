@@ -119,8 +119,8 @@ test.solve(source_indices=test_grid.source_idx, with_points=False)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target_4MHz = np.load('../data/tofs_mina_4MHZ_AIC.npy')
-target = np.load('../data/tofs_mina_AIC.npy')
+target_4MHz = np.load('../references/FE_models/results/SRP_validation_mina_4MHz.npy')
+target = np.load('../references/FE_models/results/SRP_validation_mina.npy')
 target[:32, :32] = np.nan
 target_4MHz[:32, :32] = np.nan
 

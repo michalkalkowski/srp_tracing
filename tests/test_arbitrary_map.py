@@ -122,7 +122,7 @@ test.solve(source_indices=test_grid.source_idx, with_points=True)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target = np.load('../data/tofs_arbitrary_AIC.npy')
+target = np.load('../references/FE_models/results/SRP_validation_wp2.npy')
 
 plt.figure()
 plt.plot(target[:, 6], lw=1, c='gray', label='FE 2 MHz')
