@@ -13,6 +13,7 @@ Copyright (C) Michal K Kalkowski (MIT License)
 """
 
 import numpy as np
+from tqdm import trange
 import scipy.sparse.csgraph._shortest_path as sp
 import scipy.spatial.qhull as qhull
 from scipy.spatial import cKDTree
@@ -145,7 +146,8 @@ class Solver:
         """
 
         paths = {}
-        for i in range(len(self.sources)):
+        print('Tracing...')
+        for i in trange(len(self.sources)):
             from_this_source = []
             for j in range(len(end)):
                 current = end[j]

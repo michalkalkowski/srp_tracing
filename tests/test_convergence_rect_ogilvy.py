@@ -114,7 +114,7 @@ for i in range(len(nos_seeds)):
     test.solve(source_indices=test_grid.source_idx, with_points=False)
     tofs_conv[i] = test.tfs[:, test_grid.target_idx].T[32:, :32]
 
-target = np.load('../data/tofs_ogilvy_AIC.npy')[32:]
+target = np.load('../data/SRP_validation_ogilvy.npy')[32:, :32]
 
 relative = abs(tofs_conv - target)/target
 absolute = abs(tofs_conv - target)
