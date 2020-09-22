@@ -3,9 +3,8 @@ Part of srp_tracing.
 Test of the SRP ray tracing routine for a pitch-catch configuration
 with a planar backwall.
 
-An austenitic stainless steel weld with uniform orientations (-30 deg) across the
-weld. The setup is not motivated by a realistic scenario, but serves as a simple
-test case only. Sources and receivers positioned centrally on the top surface of
+An austenitic stainless steel weld with an orientation map extracted from metallography
+of a real weld.  Sources and receivers positioned centrally on the top surface of
 the weld. The model assumes a mirrored domain to account for the reflections from
 the backwall. The material and orientation maps are reflected around the y=0 axis,
 and the sources are on the top and bottom 'near-boundary' regions of the model.
