@@ -235,10 +235,7 @@ class RectGrid:
         """
         self.mode = mode
 
-        if self.mode == 'orientations':
-            self.property_map = property_map
-        elif self.mode == 'slowness':
-            self.property_map = (1/property_map)**2
+        self.property_map = property_map
 
     def assign_materials(self, material_map, materials):
         """
@@ -322,12 +319,20 @@ class RectGrid:
                 this_material = self.materials[
                         self.material_map.flatten()[pixel]]
                 # If anisotropic, calculate incident angle
-                angles = angles[to_take]
-                orientation = self.property_map.flatten()[
-                    pixel]
-                # Calculate group velocity based on the orientation and
-                # incident ray angles
-                cg = this_material.get_wavespeed(orientation, angles)
+                if self.mode == 'orientations':
+                    angles = angles[to_take]
+                    orientation = self.property_map.flatten()[
+                        pixel]
+                    # Calculate group velocity based on the orientation and
+                    # incident ray angles
+                    cg = this_material.get_wavespeed(orientation, angles)
+                elif self.mode == 'slowness_iso':
+                    # self.property_map contains per-cell slowness (isotropic)
+                    # Consequently, material properties do not matter that much
+                    cg = 1/self.property_map.flatten()[pixel]**2
+                else:
+                    print('Mode not implemented.')
+                    break
                 # Calculate cost (time) for edges originating from the current
                 # node
                 edge_cost = (dist[to_take, 0]**2 + dist[to_take, 1]**2)/cg
