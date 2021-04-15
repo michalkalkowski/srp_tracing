@@ -90,7 +90,7 @@ class Solver:
                      allowing for ray path reconstruction.
         """
         self.sources = source_indices
-        print('SRP search...')
+        #print('SRP search...')
         if with_points:
             self.tfs, self.points = sp.shortest_path(
                 self.grid.edges,
@@ -100,7 +100,7 @@ class Solver:
             self.tfs = sp.shortest_path(self.grid.edges,
                                         return_predecessors=with_points,
                                         indices=source_indices)
-        print('Search ended.')
+        #print('Search ended.')
 
     def interpolate_tf_field(self, external=False, external_grid=None):
         """
@@ -148,8 +148,8 @@ class Solver:
         """
 
         paths = {}
-        print('Tracing...')
-        for i in trange(len(self.sources)):
+        #print('Tracing...')
+        for i in range(len(self.sources)):
             from_this_source = []
             for j in range(len(end)):
                 current = end[j]

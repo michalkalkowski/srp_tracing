@@ -48,16 +48,6 @@ cc = np.zeros([bb.shape[0], 7])
 orientations = np.column_stack((aa, bb, cc))
 new_wm = np.column_stack((aa, weld_mask, cc))
 
-# Move sources and sensors away from the edge of the domain
-orientations = np.concatenate((np.zeros([9, orientations.shape[1]]),
-                               orientations,
-                               np.zeros([8, orientations.shape[1]])),
-                              axis=0)
-
-new_wm = np.concatenate((np.zeros([9, orientations.shape[1]]),
-                         new_wm,
-                         np.zeros([8, orientations.shape[1]])),
-                        axis=0)
 orientations[new_wm != 1] = 0
 
 nx = orientations.shape[1]
@@ -73,6 +63,7 @@ sx = (element_width/2 + np.arange(start_gen, start_gen + 32*pitch, pitch))
 sy = np.array(len(sx)*[a])
 sources = targets = np.r_[np.column_stack((sx, sy)),
                           np.column_stack((sx, np.zeros(len(sy))))]
+t_ix = s_ix = np.arange(sources.shape[0])
 
 # Properties
 orientation_map = orientations
@@ -102,32 +93,36 @@ weld_basis.set_material_props(c_weld, rho_weld)
 weld_basis.calculate_wavespeeds(angles_from_ray=True)
 
 cx = -1
-cy = 18
+cy = 19
 
 no_seeds = 10
 
-test_grid = grid.RectGrid(nx, ny, cx, cy, dx, no_seeds)
+test_grid = grid.SimplRectGrid(nx, ny, cx, cy, dx, no_seeds)
 test_grid.assign_model(mode='orientations', property_map=orientation_map)
-test_grid.add_points(sources=sources, targets=targets)
 test_grid.assign_materials(new_wm,
                            dict([(0, parent_basis),
                                  (1, weld_basis)]))
+test_grid.trim_to_chamfer(a, b, c)
+test_grid.simplify_grid()
+test_grid.add_points(points=sources, sources=s_ix, targets=t_ix)
 test_grid.calculate_graph()
+
 test = solver.Solver(test_grid)
 test.solve(source_indices=test_grid.source_idx, with_points=True)
 
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target_4MHz = np.load('../data/SRP_validation_mina_4MHz.npy')
+target_4MHz = np.load('../data/SRP_validation_mina_chamfer4.npy')
 target = np.load('../data/SRP_validation_mina.npy')
+target_chamf = np.load('../data/SRP_validation_mina_chamfer.npy')
 target[:32, :32] = np.nan
 target_4MHz[:32, :32] = np.nan
 
 plt.figure()
-plt.plot(target[:, 5], lw=1, c='gray', label='FE 2 MHz')
-plt.plot(target[:, 15], lw=1, c='gray')
-plt.plot(target[:, 31 - 5], lw=1, c='gray')
+plt.plot(target_chamf[:, 5], lw=1, c='gray', label='FE chamf')
+plt.plot(target_chamf[:, 15], lw=1, c='gray')
+plt.plot(target_chamf[:, 31 - 5], lw=1, c='gray')
 plt.plot(target_4MHz[:, 5], '--', lw=1, c='black', label='FE 4 MHz')
 plt.plot(target_4MHz[:, 15], '--', lw=1, c='black')
 plt.plot(target_4MHz[:, 31 - 5], '--', lw=1, c='black')
@@ -142,7 +137,14 @@ plt.show()
 
 paths = test.calculate_ray_paths(test.grid.target_idx)
 fig, ax = plt.subplots()
+extremes = [test.grid.image_grid[:, 0].min() - test.grid.pixel_size/2,
+            test.grid.image_grid[:, 0].max() + test.grid.pixel_size/2,
+            test.grid.image_grid[:, 1].min() - test.grid.pixel_size/2,
+            test.grid.image_grid[:, 1].max() + test.grid.pixel_size/2]
+
+ax.imshow(np.rad2deg(test_grid.property_map), origin='lower',
+          extent=extremes)
 ax.plot(test_grid.grid[:, 0], test_grid.grid[:, 1], 'o', ms=1, c='gray')
-for path in paths[10]:
+for path in paths[5]:
     plt.plot(test.grid.grid[path, 0], test.grid.grid[path, 1], '-x', ms=1)
 plt.show(); plt.gca().set_aspect('equal')

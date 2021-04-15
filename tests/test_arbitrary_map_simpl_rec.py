@@ -2,9 +2,9 @@
 Part of srp_tracing.
 Test of the SRP ray tracing routine.
 
-An austenitic stainless steel weld with MINA map orientations across the
-weld. Sources and receivers positioned centrally on both the top and the bottom
-surfaces of the weld.
+An austenitic stainless steel weld with an arbitrary set of orientations
+across the weld. Sources and receivers positioned centrally on both the
+top and the bottom surfaces of the weld.
 
 @author: Michal K Kalkowski, m.kalkowski@imperial.ac.uk
 Copyright (C) Michal K Kalkowski (MIT License)
@@ -17,6 +17,7 @@ from mina.original import MINA_weld
 a = 36.8
 b = 1.
 c = 40
+
 
 # Create a MINA model for the weld first
 weld_parameters = dict([('remelt_h', 0.255),
@@ -38,8 +39,6 @@ weld.define_grid_size(2, use_centroids=True, add_boundary_cells=True,
 weld.solve()
 
 # Define the domain
-# Add cells around the weld (not necessary for this test, needed for ray
-# projections in time of flight tomography)
 orientations = weld.grain_orientations_full[:]
 bb = orientations[:]
 weld_mask = np.copy(weld.in_weld)
@@ -49,16 +48,21 @@ orientations = np.column_stack((aa, bb, cc))
 new_wm = np.column_stack((aa, weld_mask, cc))
 
 # Move sources and sensors away from the edge of the domain
-orientations = np.concatenate((np.zeros([9, orientations.shape[1]]),
-                               orientations,
-                               np.zeros([8, orientations.shape[1]])),
-                              axis=0)
-
-new_wm = np.concatenate((np.zeros([9, orientations.shape[1]]),
-                         new_wm,
-                         np.zeros([8, orientations.shape[1]])),
-                        axis=0)
+# orientations = np.concatenate((np.zeros([9, orientations.shape[1]]),
+#                                orientations,
+#                                np.zeros([8, orientations.shape[1]])),
+#                               axis=0)
+# 
+# new_wm = np.concatenate((np.zeros([9, orientations.shape[1]]),
+#                          new_wm,
+#                          np.zeros([8, orientations.shape[1]])),
+#                         axis=0)
 orientations[new_wm != 1] = 0
+
+# Load the arbitrary map to fill mina cells
+arb_map = np.load('../data/arbitrary_map.npy')
+orient = np.zeros(new_wm.shape)
+orient[new_wm == 1] = arb_map
 
 nx = orientations.shape[1]
 ny = orientations.shape[0]
@@ -71,22 +75,23 @@ element_width = 1.55
 
 sx = (element_width/2 + np.arange(start_gen, start_gen + 32*pitch, pitch))
 sy = np.array(len(sx)*[a])
-sources = targets = np.r_[np.column_stack((sx, sy)),
-                          np.column_stack((sx, np.zeros(len(sy))))]
+sources = np.r_[np.column_stack((sx, sy)),
+                np.column_stack((sx, np.zeros(len(sy))))]
+
+t_ix = s_ix = np.arange(sources.shape[0])
 
 # Properties
-orientation_map = orientations
-rho_parent = 7.9e-9
+rho_parent = 7.9
 # Define weld material
-rho_weld = 8.0e-9
-c_parent = 1e3*np.array(
+rho_weld = 8.0
+c_parent = np.array(
     [[255.61, 95.89, 95.89, 0., 0., 0.],
      [95.89, 255.61, 95.89, 0., 0., 0.],
      [95.89, 95.89, 255.61, 0., 0., 0.],
      [0., 0., 0., 79.86, 0., 0.],
      [0., 0., 0., 0., 79.86, 0.],
      [0., 0., 0., 0., 0., 79.86]])
-c_weld = 1e3*np.array([[262, 148, 160, 0, 0, 0],
+c_weld = np.array([[262, 148, 160, 0, 0, 0],
                        [148, 262, 160, 0, 0, 0],
                        [160, 160, 229, 0, 0, 0],
                        [0, 0, 0, 82, 0, 0],
@@ -102,16 +107,18 @@ weld_basis.set_material_props(c_weld, rho_weld)
 weld_basis.calculate_wavespeeds(angles_from_ray=True)
 
 cx = -1
-cy = 18
+cy = 19
 
 no_seeds = 10
 
-test_grid = grid.RectGrid(nx, ny, cx, cy, dx, no_seeds)
-test_grid.assign_model(mode='orientations', property_map=orientation_map)
-test_grid.add_points(sources=sources, targets=targets)
+test_grid = grid.SimplRectGrid(nx, ny, cx, cy, dx, no_seeds)
+test_grid.assign_model(mode='orientations', property_map=orient)
 test_grid.assign_materials(new_wm,
                            dict([(0, parent_basis),
                                  (1, weld_basis)]))
+test_grid.trim_to_chamfer(a, b, c)
+test_grid.simplify_grid()
+test_grid.add_points(points=sources, sources=s_ix, targets=t_ix)
 test_grid.calculate_graph()
 test = solver.Solver(test_grid)
 test.solve(source_indices=test_grid.source_idx, with_points=True)
@@ -119,25 +126,19 @@ test.solve(source_indices=test_grid.source_idx, with_points=True)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target_4MHz = np.load('../data/SRP_validation_mina_4MHz.npy')
-target = np.load('../data/SRP_validation_mina.npy')
-target[:32, :32] = np.nan
-target_4MHz[:32, :32] = np.nan
+target = np.load('../data/SRP_validation_wp2.npy')
 
 plt.figure()
-plt.plot(target[:, 5], lw=1, c='gray', label='FE 2 MHz')
+plt.plot(target[:, 6], lw=1, c='gray', label='FE 2 MHz')
 plt.plot(target[:, 15], lw=1, c='gray')
 plt.plot(target[:, 31 - 5], lw=1, c='gray')
-plt.plot(target_4MHz[:, 5], '--', lw=1, c='black', label='FE 4 MHz')
-plt.plot(target_4MHz[:, 15], '--', lw=1, c='black')
-plt.plot(target_4MHz[:, 31 - 5], '--', lw=1, c='black')
-plt.plot(tofs_srp[:, 5],  lw=1,  c='red', label='SRP')
+plt.plot(tofs_srp[:, 6], lw=1,  c='red', label='SRP')
 plt.plot(tofs_srp[:, 15], lw=1, c='red')
 plt.plot(tofs_srp[:, 31 - 5], lw=1, c='red')
 plt.xlabel('sensor #')
 plt.ylabel('time of flight in s')
-plt.legend()
 plt.tight_layout()
+plt.legend()
 plt.show()
 
 paths = test.calculate_ray_paths(test.grid.target_idx)
