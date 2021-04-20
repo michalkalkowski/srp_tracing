@@ -43,10 +43,6 @@ aa = np.zeros([bb.shape[0], 8])
 cc = np.zeros([bb.shape[0], 7])
 orientations = np.column_stack((aa, bb, cc))
 new_wm = np.column_stack((aa, weld_mask, cc))
-aa = np.zeros([bb.shape[0], 8])
-cc = np.zeros([bb.shape[0], 7])
-orientations = np.column_stack((aa, bb, cc))
-new_wm = np.column_stack((aa, weld_mask, cc))
 
 # Move sources and sensors away from the edge of the domain
 orientations = np.concatenate((orientations,
@@ -122,13 +118,21 @@ test.solve(source_indices=test_grid.source_idx, with_points=True)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 #np.save('tofs_double_domain.npy', tofs_srp)
 target = np.load('../data/SRP_validation_backwall_ogilvy.npy')
+target2 = np.load('../data/SRP_validation_ogilvy_backwall.npy')
+target3 = np.load('../data/SRP_validation_ogilvy_mirror.npy')[32:]*1e6
 
 plt.figure()
-plt.plot(target[:, 1], lw=1, c='gray', label='FE 2 MHz')
-plt.plot(target[:, 10], lw=1, c='gray')
-plt.plot(target[:, 31 - 5], lw=1, c='gray')
-plt.plot(tofs_srp[:, 1], lw=1,  c='red', label='SRP')
-plt.plot(tofs_srp[:, 10], lw=1, c='red')
+# plt.plot(target[:, 10], lw=1, c='gray', label='FE 2 MHz')
+# plt.plot(target[:, 14], lw=1, c='gray')
+# plt.plot(target[:, 31 - 5], lw=1, c='gray')
+plt.plot(target2[:, 10], lw=1, c='C1', label='FE 4 MHz')
+plt.plot(target2[:, 14], lw=1, c='C1')
+plt.plot(target2[:, 31 - 5], lw=1, c='C1')
+plt.plot(target3[:, 10], lw=1, c='C2', label='FE mirr ')
+plt.plot(target3[:, 14], lw=1, c='C2')
+plt.plot(target3[:, 31 - 5], lw=1, c='C2')
+plt.plot(tofs_srp[:, 10], lw=1,  c='red', label='SRP')
+plt.plot(tofs_srp[:, 14], lw=1, c='red')
 plt.plot(tofs_srp[:, 31 - 5], lw=1, c='red')
 plt.xlabel('sensor #')
 plt.ylabel('time of flight in s')
@@ -146,12 +150,12 @@ gy = -dx/2 + np.append(np.unique(test_grid.image_grid[:, 1]),
 Gx, Gy = np.meshgrid(gx, gy)
 
 fig, ax = plt.subplots()
-ax.imshow(new_wm, origin='lower',
+ax.imshow(np.rad2deg(orientation_map), origin='lower',
           extent=[gx.min(), gx.max(), gy.min(), gy.max()])
 ax.plot(test_grid.grid[:, 0], test_grid.grid[:, 1], 'o', ms=1, c='gray')
 ax.plot(Gx, Gy, c='gray')
 ax.plot(Gx.T, Gy.T, c='gray')
 ax.plot(test_grid.image_grid[:, 0], test_grid.image_grid[:, 1], 'x', ms=4)
-for path in paths[25]:
+for path in paths[10]:
     plt.plot(test.grid.grid[path, 0], test.grid.grid[path, 1], '-x', ms=1)
 plt.show()
