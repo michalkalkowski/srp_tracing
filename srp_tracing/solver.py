@@ -163,6 +163,30 @@ class Solver:
             paths[i] = from_this_source
         return paths
 
+    def fold_paths(self, paths):
+        """
+        Folds paths for calculations over a mirrored domain (simulating
+        backwall reflected signals).
+        """
+        # Create lookup table - which node in the mirror corresponds to original node
+        bot_grid = np.where(self.grid.grid[:, 1] < 0)[0]
+        lookup = np.arange(self.grid.grid.shape[0])
+
+        for point in bot_grid:
+            test_point = np.copy(self.grid.grid[point])
+            test_point[1] *= -1
+            _, org = self.grid.tree.query(test_point)
+            lookup[point] = org
+
+        folded_paths = []
+        for src in range(len(paths.keys())):
+            one_source = paths[src]
+            local = []
+            for path in one_source:
+                local.append(list(lookup[path]))
+            folded_paths.append(local)
+        return folded_paths
+
     def calculate_gradient(self, residue, slowness_der=True):
         paths = calculate_ray_paths(self.grid.grid.target_idx)
         tree = cKDTree(self.grid.grid.image_grid)

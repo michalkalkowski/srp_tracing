@@ -1126,8 +1126,8 @@ class SimplRectGrid:
             self.grid = np.concatenate((self.grid_1, np.row_stack(to_add)), axis=0)
             indices = np.row_stack(indices)
 
-            self.source_idx = indices[indices[:, 0] == sources, 1]
-            self.target_idx = indices[indices[:, 0] == targets, 1]
+            self.source_idx = indices[np.in1d(indices[:, 0], sources), 1]
+            self.target_idx = indices[np.in1d(indices[:, 0], targets), 1]
             added_points_idx = np.arange(self.grid_1.shape[0], self.grid_1.shape[0] + len(to_add))
         # Check which sources are in the homogeneous regios
         dd, _ = self.image_tree_trim.query(self.grid[added_points_idx])
