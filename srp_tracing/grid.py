@@ -17,6 +17,7 @@ Copyright (C) Michal K Kalkowski (MIT License)
 from collections import defaultdict
 import numpy as np
 from tqdm import trange
+from itertools import combinations
 from scipy.spatial import cKDTree
 from scipy.sparse import csr_matrix, coo_matrix
 import scipy.interpolate as interpolate
@@ -372,12 +373,11 @@ class RectGrid:
         grid_points = np.r_[np.column_stack((Gdx.flatten(), Gdy.flatten())),
                             np.column_stack((Gdx2.flatten(), Gdy2.flatten()))]
 
-        sorted_idx = np.lexsort(grid_points.T)
+        sorted_idx = np.lexsort(np.round(1e8*grid_points).T)
         sorted_grid = grid_points[sorted_idx]
         changes = np.diff(sorted_grid, axis=0)
-        changes[abs(changes) < 1e-10] = 0
-        row_mask = np.append([True], np.any(changes, axis=1))
-        self.grid_1 = sorted_grid[row_mask]
+        self.grid_1 = np.row_stack((sorted_grid[0], sorted_grid[1:][
+            ~(abs(changes) < 1e-10).all(axis=1)]))
 
     def assign_model(self, mode, property_map=None, weld_model=None,
                      only_weld=False):
@@ -443,6 +443,112 @@ class RectGrid:
                 conc = [self.grid_1] + to_add
                 self.grid = np.concatenate(conc, axis=0)
 
+    def set_up_graph(self):
+        rows = []
+        cols = []
+
+        self.image_tree = cKDTree(self.image_grid)
+        self.tree = cKDTree(self.grid)
+        self.r_closest = defaultdict(list)
+        self.pixel_type = np.zeros(self.image_grid.shape[0])
+        first = True
+        self.r_closest = defaultdict(list)
+        self.pixels_with_sources = defaultdict(list)
+        for pixel in range(len(self.image_grid)):
+            # identify points within a pixel
+            points = self.tree.query_ball_point(self.image_grid[pixel],
+                                                0.501*self.pixel_size*2**0.5)
+            # In case the search circle went outside the pixel, filter out
+            take = (abs(self.grid[points] - self.image_grid[pixel])
+                    <= self.pixel_size/2*1.001).all(axis=1)
+            points = np.array(points)[take]
+            points = points[np.lexsort(np.round(1e8*self.grid[points]).T)]
+            # now are sorted from slow y fast x from bottom to top, from left to right
+            self.r_closest[pixel] = points
+            if points.shape[0] == self.no_seeds*4:
+                self.pixel_type[pixel] = 0
+                # Standard cell:
+                if first is True:
+                    # pre calculate angles and distances
+                    local_ind = np.arange(points.shape[0])
+                    pairs = np.array(list(combinations(local_ind, 2)))
+                    local_edges = self.grid[points][pairs, :]
+                    dist = -local_edges[:, 0] + local_edges[:, 1]
+                    self.angles = np.arctan2(dist[:, 1], dist[:, 0])
+                    self.travel_d = (dist**2).sum(axis=1)
+                    self.pairs = pairs
+                    self.row_pairs = pairs.flatten('F')
+                    self.col_pairs = pairs[:, ::-1].flatten('F')
+                    first = False
+                row_pairs = self.row_pairs
+                col_pairs = self.col_pairs
+            else:
+                self.pixel_type[pixel] = 1
+                local_ind = np.arange(points.shape[0])
+                pairs = np.array(list(combinations(local_ind, 2)))
+                local_edges = self.grid[points][pairs, :]
+                dist = -local_edges[:, 0] + local_edges[:, 1]
+                angles = np.arctan2(dist[:, 1], dist[:, 0])
+                travel_d = (dist**2).sum(axis=1)
+                self.pixels_with_sources[pixel] = dict([('angles', angles),
+                                                        ('travel_d', travel_d),
+                                                        ('pairs', pairs)])
+                row_pairs = pairs.flatten('F')
+                col_pairs = pairs[:, ::-1].flatten('F')
+
+            rows.extend(points[row_pairs])
+            cols.extend(points[col_pairs])
+        self.rows = np.array(rows)
+        self.cols = np.array(cols)
+
+    def update_edges(self, tie_link=[None, None]):
+        edges = np.zeros(self.rows.shape)
+        def assign_wavespeeds(pixel):
+            this_material = self.materials[
+                    self.material_map.flatten()[pixel]]
+            if self.pixel_type[pixel] == 0:
+                local_ang = self.angles
+                local_travel_d = self.travel_d
+            else:
+                local_ang = self.pixels_with_sources[pixel]['angles']
+                local_travel_d = self.pixels_with_sources[pixel]['travel_d']
+            # If anisotropic, calculate incident angle
+            if self.mode == 'orientations':
+                orientation = self.property_map.flatten()[
+                    pixel]
+                # Calculate group velocity based on the orientation and
+                # incident ray angles
+                cg = this_material.get_wavespeed(orientation, local_ang)
+            elif self.mode == 'slowness_iso':
+                # self.property_map contains per-cell slowness (isotropic)
+                # Consequently, material properties do not matter that much
+                cg = 1/self.property_map.flatten()[pixel]**2
+            else:
+                print('Mode not implemented.')
+
+            # Calculate cost (time) for edges originating from the current
+            # node
+            #edges.extend(np.repeat((local_travel_d/cg)**0.5, 2))
+            return np.tile((local_travel_d/cg)**0.5, 2)
+
+        position = 0
+        for pixel in range(len(self.image_grid)):
+            update = assign_wavespeeds(pixel)
+            edges[position:position + update.shape[0]] = update
+            position += update.shape[0]
+#        edges = np.array(edges)
+        if tie_link[0] is not None and tie_link[1] is not None:
+            if len(tie_link[0]) == len(tie_link[1]):
+                self.rows.extend(list(tie_link[0]))
+                self.cols.extend(list(tie_link[1]))
+                edges.extend([0]*len(tie_link[0]))
+            else:
+                print('Tie link misdefined')
+
+        # Create a sparse matrix of graph edge lengths (times of flight)
+        self.edges = coo_matrix((edges, (self.cols, self.rows))).transpose().tocsr()
+
+
     def calculate_graph(self, tie_link=[None, None]):
         """
         Defines the connections between the nodes (graph edges) and calculates
@@ -507,7 +613,8 @@ class RectGrid:
                 edges.extend([0]*len(tie_link[0]))
             else:
                 print('Tie link misdefined')
-
+        self.cols = cols
+        self.rows = rows
         # Create a sparse matrix of graph edge lengths (times of flight)
         self.edges = coo_matrix((edges, (cols, rows))).transpose().tocsr()
 
