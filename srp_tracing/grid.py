@@ -500,12 +500,21 @@ class RectGrid:
             cols.extend(points[col_pairs])
         self.rows = np.array(rows)
         self.cols = np.array(cols)
+        # if there is an isotropic material in the domain, precompute ToFs for a standard cell
+        mats = [mat.anisotropy for k, mat in self.materials.items()]
+        if mats.count(0) > 0:
+            cg_iso = self.materials[mats.index(0)].get_wavespeed(0, 0)
+            self.iso_tofs = (self.travel_d/cg_iso)**0.5
+
+
 
     def update_edges(self, tie_link=[None, None]):
         edges = np.zeros(self.rows.shape)
         def assign_wavespeeds(pixel):
             this_material = self.materials[
                     self.material_map.flatten()[pixel]]
+            if this_material.anisotropy == 0 and self.pixel_type[pixel] == 0:
+                return np.tile((self.iso_tofs), 2)
             if self.pixel_type[pixel] == 0:
                 local_ang = self.angles
                 local_travel_d = self.travel_d
@@ -1102,7 +1111,9 @@ class SimplRectGrid:
         self.grid_1 = sorted_grid[row_mask]
 
     def trim_to_chamfer(self, a, b, c, mirror_domain=False):
+        self.a, self.b, self.c = a, b, c
         weld_angle = np.arctan((c - b)/2/a)
+        self.weld_angle = weld_angle
         
         left_chamfer = np.array([[-c/2, a], [-b/2, 0]])
         node_spacing = self.pixel_size/self.no_seeds
@@ -1135,6 +1146,55 @@ class SimplRectGrid:
             self.left_iso_zone = np.arange(first_new_idx, first_new_idx + 2*seed_x.shape[0])
             self.right_iso_zone = np.arange(first_new_idx + 2*seed_x.shape[0],
                                             first_new_idx + 4*seed_x.shape[0])
+        self.trimmed_by_outline = False
+    
+    def trim_to_weld(self, weld_outline, mirror_domain=False):
+        self.trimmed_by_outline = True
+        self.weld_outline = weld_outline
+        weld_centre = np.argmin(weld_outline[:, 1]) 
+        weld_outline_int = interpolate.interp1d(weld_outline[:, 0], weld_outline[:, 1], 
+                                       kind='linear', fill_value=np.max(weld_outline[:, 1]),
+                                       bounds_error=False)
+        left_chamfer = weld_outline[:weld_centre + 1]
+        node_spacing = self.pixel_size/self.no_seeds
+        # total length of the weld outline
+        total_length = np.linalg.norm(np.diff(weld_outline, axis=0), axis=1).sum()
+        seeds_per_chamfer = int(total_length/node_spacing)
+        seed_x = np.linspace(weld_outline[0, 0], weld_outline[-1, 0],
+                             seeds_per_chamfer + 1)
+        left_chamfer_seeds = sum(seed_x <= weld_outline[weld_centre, 0])
+        right_chamfer_seeds = sum(seed_x >= weld_outline[weld_centre, 0])
+        seed_y = weld_outline_int(seed_x)
+        if not mirror_domain:
+            take = ((self.grid_1[:, 1] + node_spacing*1e-6
+                         > weld_outline_int(self.grid_1[:, 0]))
+                    & (self.grid_1[:, 0] >= weld_outline.min(axis=0)[0])
+                    & (self.grid_1[:, 0] <= weld_outline.max(axis=0)[0]))
+        else:
+            take = ((abs(self.grid_1[:, 1]) + node_spacing*1e-6
+                           > weld_outline_int(self.grid_1[:, 0]))
+                    & (self.grid_1[:, 0] >= weld_outline.min(axis=0)[0])
+                    & (self.grid_1[:, 0] <= weld_outline.max(axis=0)[0]))
+        first_new_idx = self.grid_1[take].shape[0]
+        if not mirror_domain:
+            self.grid_1 = np.concatenate((self.grid_1[take], np.column_stack((seed_x, seed_y))), axis=0)
+            self.left_iso_zone = np.arange(first_new_idx, first_new_idx + left_chamfer_seeds)
+            self.right_iso_zone = np.arange(first_new_idx + left_chamfer_seeds,
+                                            first_new_idx + left_chamfer_seeds + right_chamfer_seeds)
+        else:
+            self.grid_1 = np.concatenate((self.grid_1[take],
+                                          np.column_stack((seed_x[:left_chamfer_seeds],
+                                                           seed_y[:left_chamfer_seeds])),
+                                          np.column_stack((seed_x[:left_chamfer_seeds],
+                                                           -seed_y[:left_chamfer_seeds])),
+                                          np.column_stack((seed_x[left_chamfer_seeds:],
+                                                           seed_y[left_chamfer_seeds:])),
+                                         np.column_stack((seed_x[left_chamfer_seeds:],
+                                                          -seed_y[left_chamfer_seeds:]))),axis=0)
+            self.left_iso_zone = np.arange(first_new_idx, first_new_idx + 2*left_chamfer_seeds)
+            self.right_iso_zone = np.arange(first_new_idx + 2*left_chamfer_seeds,
+                                            first_new_idx + 2*left_chamfer_seeds +
+                                            2*right_chamfer_seeds)
         
     def assign_model(self, mode, property_map=None, weld_model=None,
                      only_weld=False):
@@ -1238,11 +1298,21 @@ class SimplRectGrid:
             added_points_idx = np.arange(self.grid_1.shape[0], self.grid_1.shape[0] + len(to_add))
         # Check which sources are in the homogeneous regios
         dd, _ = self.image_tree_trim.query(self.grid[added_points_idx])
-        outside = dd > 0.5*2**0.5*self.pixel_size
+        add_neg = added_points_idx[self.grid[added_points_idx][:, 0] < 0]
+        add_pos = added_points_idx[self.grid[added_points_idx][:, 0] >= 0]
+#        outside = dd > 0.5*2**0.5*self.pixel_size
+        if self.trimmed_by_outline is False:
+            take_neg = (abs(self.grid[add_neg, 1]) 
+                      < np.tan(np.pi/2 + self.weld_angle)*(self.grid[add_neg, 0] + self.b/2))
+            take_pos = (abs(self.grid[add_pos, 1]) 
+                      < np.tan(np.pi/2 - self.weld_angle)*(self.grid[add_pos, 0] - self.b/2))
+        else:
+            take_neg = self.grid[add_neg, 0] < self.weld_outline[0, 0]
+            take_pos = self.grid[add_pos, 0] > self.weld_outline[-1, 0]
         self.left_iso_zone = np.append(self.left_iso_zone,
-                                       added_points_idx[outside][self.grid[added_points_idx][outside][:, 0] < 0])
+                                       add_neg[take_neg])
         self.right_iso_zone = np.append(self.right_iso_zone,
-                                       added_points_idx[outside][self.grid[added_points_idx][outside][:, 0] > 0])
+                                       add_pos[take_pos])
 
     def calculate_graph(self, tie_link=[None, None]):
         """
@@ -1271,6 +1341,22 @@ class SimplRectGrid:
             # In case the search circle went outside the pixel, filter out
             take = (abs(self.grid[points] - self.image_grid_trim[pixel])
                     <= self.pixel_size/2*1.001).all(axis=1)
+#             points = np.array(points)[take1]
+#             if len(np.array(points)) == 0:
+#                 print('no points')
+#                 continue
+            # Check if the points are within the weld (inside the chamfer)
+#             pos_points = points[self.grid[points, 0] < 0]
+#             neg_points = points[self.grid[points, 0] >= 0]
+#             take = (abs(self.grid[points, 1]) 
+#                     >= np.tan(np.pi/2 - np.sign(self.grid[points, 0])
+#                              *self.weld_angle)*(self.grid[points, 0] -
+#                                                 np.sign(self.grid[points, 0])
+#                                                 *self.b/2))
+#            take_pos = (abs(self.grid[pos_points, 1]) 
+#                        > np.tan(np.pi/2 - self.weld_angle)*(self.grid[pos_points, 0] - self.b/2))
+#            take_neg = (abs(self.grid[neg_points, 1]) 
+#                        > np.tan(np.pi/2 + self.weld_angle)*(self.grid[neg_points, 0] + self.b/2))
             if len(np.array(points)[take]) == 0:
                 print('no points')
                 continue
