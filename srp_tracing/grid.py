@@ -396,7 +396,7 @@ class RectGrid:
 
         self.property_map = property_map
 
-    def assign_materials(self, material_map, materials):
+    def assign_materials(self, material_map, materials, left_add=0, right_add=0):
         """
         Assign a dictionary mapping material map indices to WaveBasis objects
         and material map assigning the index from materials dictionary to each
@@ -411,6 +411,7 @@ class RectGrid:
         """
         self.materials = materials
         self.material_map = material_map
+        self.original_weld_mask = self.material_map[:, left_add:-right_add]
 
     def add_points(self, sources=None, targets=None):
 
@@ -1102,7 +1103,7 @@ class SimplRectGrid:
         Gdx2, Gdy2 = np.meshgrid(gdx, Gy)
         grid_points = np.r_[np.column_stack((Gdx.flatten(), Gdy.flatten())),
                             np.column_stack((Gdx2.flatten(), Gdy2.flatten()))]
-
+        grid_points = np.unique(np.round(grid_points, 10), axis=0)
         sorted_idx = np.lexsort(grid_points.T)
         sorted_grid = grid_points[sorted_idx]
         changes = np.diff(sorted_grid, axis=0)
@@ -1152,8 +1153,9 @@ class SimplRectGrid:
         self.trimmed_by_outline = True
         self.weld_outline = weld_outline
         weld_centre = np.argmin(weld_outline[:, 1]) 
-        weld_outline_int = interpolate.interp1d(weld_outline[:, 0], weld_outline[:, 1], 
-                                       kind='linear', fill_value=np.max(weld_outline[:, 1]),
+        self.weld_outline_int = interpolate.interp1d(weld_outline[:, 0], weld_outline[:, 1], 
+                                       kind='linear', fill_value=np.max(weld_outline[:, 1]) +
+                                                     self.pixel_size*0.2,
                                        bounds_error=False)
         left_chamfer = weld_outline[:weld_centre + 1]
         node_spacing = self.pixel_size/self.no_seeds
@@ -1164,15 +1166,15 @@ class SimplRectGrid:
                              seeds_per_chamfer + 1)
         left_chamfer_seeds = sum(seed_x <= weld_outline[weld_centre, 0])
         right_chamfer_seeds = sum(seed_x >= weld_outline[weld_centre, 0])
-        seed_y = weld_outline_int(seed_x)
+        seed_y = self.weld_outline_int(seed_x)
         if not mirror_domain:
             take = ((self.grid_1[:, 1] + node_spacing*1e-6
-                         > weld_outline_int(self.grid_1[:, 0]))
+                         > self.weld_outline_int(self.grid_1[:, 0]))
                     & (self.grid_1[:, 0] >= weld_outline.min(axis=0)[0])
                     & (self.grid_1[:, 0] <= weld_outline.max(axis=0)[0]))
         else:
             take = ((abs(self.grid_1[:, 1]) + node_spacing*1e-6
-                           > weld_outline_int(self.grid_1[:, 0]))
+                           > self.weld_outline_int(self.grid_1[:, 0]))
                     & (self.grid_1[:, 0] >= weld_outline.min(axis=0)[0])
                     & (self.grid_1[:, 0] <= weld_outline.max(axis=0)[0]))
         first_new_idx = self.grid_1[take].shape[0]
@@ -1183,19 +1185,20 @@ class SimplRectGrid:
                                             first_new_idx + left_chamfer_seeds + right_chamfer_seeds)
         else:
             self.grid_1 = np.concatenate((self.grid_1[take],
-                                          np.column_stack((seed_x[:left_chamfer_seeds],
-                                                           seed_y[:left_chamfer_seeds])),
-                                          np.column_stack((seed_x[:left_chamfer_seeds],
-                                                           -seed_y[:left_chamfer_seeds])),
+                                          np.column_stack((seed_x[:left_chamfer_seeds + 1],
+                                                           seed_y[:left_chamfer_seeds + 1])),
+                                          np.column_stack((seed_x[:left_chamfer_seeds + 1][::-1],
+                                                           -seed_y[:left_chamfer_seeds + 1][::-1])),
+                                          np.column_stack((seed_x[left_chamfer_seeds:][::-1],
+                                                           seed_y[left_chamfer_seeds:][::-1])),
                                           np.column_stack((seed_x[left_chamfer_seeds:],
-                                                           seed_y[left_chamfer_seeds:])),
-                                         np.column_stack((seed_x[left_chamfer_seeds:],
-                                                          -seed_y[left_chamfer_seeds:]))),axis=0)
-            self.left_iso_zone = np.arange(first_new_idx, first_new_idx + 2*left_chamfer_seeds)
-            self.right_iso_zone = np.arange(first_new_idx + 2*left_chamfer_seeds,
-                                            first_new_idx + 2*left_chamfer_seeds +
+                                                           -seed_y[left_chamfer_seeds:]))),axis=0)
+            self.left_iso_zone = np.arange(first_new_idx, first_new_idx + 2*left_chamfer_seeds + 2)
+            self.right_iso_zone = np.arange(first_new_idx + 2 + 2*left_chamfer_seeds,
+                                            first_new_idx + 2 + 2*left_chamfer_seeds +
                                             2*right_chamfer_seeds)
-        
+            # add weld centre point to the left iso zone
+
     def assign_model(self, mode, property_map=None, weld_model=None,
                      only_weld=False):
         """
@@ -1229,7 +1232,7 @@ class SimplRectGrid:
         self.materials = materials
         self.material_map = material_map
 
-    def simplify_grid(self):
+    def simplify_grid(self, left_add=0, right_add=0):
         """
         Simplifes the grid be keeping only the cells covering the weld. The isotropic areas
         to the left and to the right will be  modelled with straight rays.
@@ -1238,11 +1241,31 @@ class SimplRectGrid:
         new_grid = []
         new_pixels = []
         tree = cKDTree(self.grid_1)
+        # Some pixels may not have the orientations and the material props set (those which contain
+        # the chamfer); Fix this by using neighbouring properties
+        temp_props = np.copy(self.property_map)
+        temp_materials = np.copy(self.material_map)
+        temp_props[self.material_map == 0] = np.nan
+        for i in range(temp_props.shape[0]):
+            filled = np.where(~np.isnan(temp_props[i]))[0]
+            temp_props[i, :filled[0]] = temp_props[i, filled[0]]
+            temp_props[i, filled[-1]:] = temp_props[i, filled[-1]]
         mat_flat = self.material_map.flatten()
+        prop_flat = self.property_map.flatten()
         self.image_grid_lookup = np.zeros(self.image_grid.shape[0], 'int') - 1
         cnt = 0
         for pixel in range(len(self.image_grid)):
-            if mat_flat[pixel] != 0:
+#            if mat_flat[pixel] != 0:
+            # check all corner points of a cell; if any of them is above the weld outline, the cell
+            # belogs to the weld
+            half_size = self.pixel_size/2
+            cell_corners = self.image_grid[pixel] + np.array([[-half_size, -half_size, half_size,
+                                                               half_size], [-half_size, half_size,
+                                                                            -half_size, half_size]]).T
+            if (abs(cell_corners[:, 1]) >= self.weld_outline_int(cell_corners[:, 0])).any():
+                mat_flat[pixel] = 1
+                prop_flat[pixel] = temp_props.flatten()[pixel]
+
                 points = tree.query_ball_point(self.image_grid[pixel], 0.501*self.pixel_size*2**0.5)
                 take = (abs(self.grid_1[points] - self.image_grid[pixel]) <= self.pixel_size/2*1.001).all(axis=1)
                 new_grid.extend(list(np.array(points)[take]))
@@ -1265,6 +1288,11 @@ class SimplRectGrid:
         self.image_grid_trim = np.array(self.image_grid[new_pixels])
         self.image_tree_trim = cKDTree(self.image_grid_trim)
         self.grid_tree_trim = cKDTree(self.grid_1)
+        self.property_map = prop_flat.reshape(self.property_map.shape)
+        self.material_map = mat_flat.reshape(self.property_map.shape)
+        self.original_weld_mask = self.material_map[:, left_add:-right_add]
+        self.material_map[:, :left_add] = 0
+        self.material_map[:, -right_add:] = 0
 
     def add_points(self, points=None, sources=None, targets=None):
 
@@ -1289,7 +1317,7 @@ class SimplRectGrid:
                     indices.append([i, self.grid_1.shape[0] + cnt])
                     cnt += 1
                 else:
-                    indices.append(i, ix)
+                    indices.append([i, ix])
             self.grid = np.concatenate((self.grid_1, np.row_stack(to_add)), axis=0)
             indices = np.row_stack(indices)
 
@@ -1309,10 +1337,358 @@ class SimplRectGrid:
         else:
             take_neg = self.grid[add_neg, 0] < self.weld_outline[0, 0]
             take_pos = self.grid[add_pos, 0] > self.weld_outline[-1, 0]
+
+        self.left_iso_chamfer = np.copy(self.left_iso_zone)
+        self.right_iso_chamfer = np.copy(self.right_iso_zone)
         self.left_iso_zone = np.append(self.left_iso_zone,
                                        add_neg[take_neg])
+        self.left_iso_trans = add_neg[take_neg]
+        self.right_iso_trans = add_pos[take_pos]
         self.right_iso_zone = np.append(self.right_iso_zone,
                                        add_pos[take_pos])
+
+    def set_up_graph(self):
+        rows = []
+        cols = []
+
+        self.image_tree = cKDTree(self.image_grid)
+        self.tree = cKDTree(self.grid)
+        self.r_closest = defaultdict(list)
+        self.pixel_type = np.zeros(self.image_grid_trim.shape[0])
+        first = True
+        self.r_closest = defaultdict(list)
+        self.irregular_pixels = dict()
+        single_counter = 0
+        for full_pixel in trange(len(self.image_grid)):
+            if self.image_grid_lookup[full_pixel] == -1:
+                continue
+            else:
+                pixel = self.image_grid_lookup[full_pixel]
+
+            # identify points within a pixel
+            points = self.tree.query_ball_point(self.image_grid_trim[pixel],
+                                                0.52*self.pixel_size*2**0.5)
+            # In case the search circle went outside the pixel, filter out
+            take = (abs(self.grid[points] - self.image_grid_trim[pixel])
+                    <= self.pixel_size/2*1.02).all(axis=1)
+            points = np.array(points)[take]
+            points = points[np.lexsort(np.round(1e8*self.grid[points]).T)]
+            if len(points) < 2:
+                single_counter += 1
+                self.pixel_type[pixel] = -1
+                continue
+            # now are sorted from slow y fast x from bottom to top, from left to right
+            self.r_closest[pixel] = points
+            # to check is this is a standard cell, verify if there is an additional node
+            # (source/receiver) and whether the shape is square
+            cell_is_square = np.isclose(abs(self.grid[points] - self.image_grid_trim[pixel]),
+                    self.pixel_size/2).any(axis=1).all()
+
+            if points.shape[0] == self.no_seeds*4 and cell_is_square:
+                self.pixel_type[pixel] = 0
+                # Standard cell:
+                if first is True:
+                    # pre calculate angles and distances
+                    local_ind = np.arange(points.shape[0])
+                    pairs = np.array(list(combinations(local_ind, 2)))
+                    local_edges = self.grid[points][pairs, :]
+                    dist = -local_edges[:, 0] + local_edges[:, 1]
+                    self.angles = np.arctan2(dist[:, 1], dist[:, 0])
+                    self.travel_d = (dist**2).sum(axis=1)
+                    self.pairs = pairs
+                    self.row_pairs = pairs.flatten('F')
+                    self.col_pairs = pairs[:, ::-1].flatten('F')
+                    first = False
+                row_pairs = self.row_pairs
+                col_pairs = self.col_pairs
+            else:
+                self.pixel_type[pixel] = 1
+                local_ind = np.arange(points.shape[0])
+                pairs = np.array(list(combinations(local_ind, 2)))
+                local_edges = self.grid[points][pairs, :]
+                dist = -local_edges[:, 0] + local_edges[:, 1]
+                angles = np.arctan2(dist[:, 1], dist[:, 0])
+                travel_d = (dist**2).sum(axis=1)
+                self.irregular_pixels[pixel] = dict([('angles', angles),
+                                                        ('travel_d', travel_d),
+                                                        ('pairs', pairs)])
+                row_pairs = pairs.flatten('F')
+                col_pairs = pairs[:, ::-1].flatten('F')
+
+            rows.extend(points[row_pairs])
+            cols.extend(points[col_pairs])
+        # if there is an isotropic material in the domain, precompute ToFs for a standard cell
+        mats = [mat.anisotropy for k, mat in self.materials.items()]
+        if mats.count(0) > 0:
+            cg_iso = self.materials[mats.index(0)].get_wavespeed(0, 0)
+            self.iso_tofs = (self.travel_d/cg_iso)**0.5
+        self.left_iso_rows, self.left_iso_cols = [], []
+        self.left_iso_edges = []
+        # Add left homogeneous zone
+        if self.left_iso_zone is not None:
+            # Go through possible connections; first top chamfer vs bottom chamfer (assumes
+            # pulse echo)
+            cham_x = self.grid[self.left_iso_chamfer, 0]
+            cham_y = self.grid[self.left_iso_chamfer, 1]           
+            mid_chamfer = self.left_iso_chamfer.shape[0]//2
+            mid_trans = self.left_iso_trans.shape[0]//2
+            top_n = np.arange(mid_chamfer)
+            bot_n = np.arange(mid_chamfer, mid_chamfer*2)
+            tt, bb = np.meshgrid(top_n, bot_n)
+            pairs = np.c_[tt.flatten(), bb.flatten()]
+            local_edges = self.grid[self.left_iso_chamfer[pairs]]
+            dist = -local_edges[:, 0] + local_edges[:, 1]
+            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
+                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
+                                                          - local_edges[:, 0, 1].reshape(-1, 1))
+            flag = cham_x.reshape(1, -1) >= interp_ray
+            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
+            ch_edge_is_good = []
+            for edge in range(flag.shape[0]):
+                ch_edge_is_good.append(flag[edge][pairs[edge, 0]:pairs[edge, 1]].all())
+            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer)
+            # do the same for tranducer vs chamfer 
+
+            top_n = np.arange(mid_trans) + 2*mid_chamfer
+            bot_n = np.arange(mid_chamfer*2)
+            tt, bb = np.meshgrid(top_n, bot_n)
+            pairs = np.c_[tt.flatten(), bb.flatten()]
+            local_edges = self.grid[self.left_iso_zone[pairs]]
+            dist = -local_edges[:, 0] + local_edges[:, 1]
+            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
+                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
+                                                          - local_edges[:, 0, 1].reshape(-1, 1))
+            flag = cham_x.reshape(1, -1) >= interp_ray
+            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
+            tr_edge_is_good = []
+            for edge in range(flag.shape[0]):
+                tr_edge_is_good.append(flag[edge][:pairs[edge, 1]].all())
+            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans)
+
+
+            cs = self.left_iso_chamfer.shape[0]
+            ts = self.left_iso_trans.shape[0]
+            big_row, big_col = np.meshgrid(self.left_iso_zone, self.left_iso_zone)
+            big_row[:cs//2, :cs//2] = -99
+            big_row[cs//2:-ts, cs//2:-ts] = -99
+            big_row[:-ts, cs:-ts//2][~tr_edge_is_good] = -99
+            big_row[:-ts, -ts//2:][~tr_edge_is_good[::-1]] = -99
+            big_row[cs:-ts//2, :-ts][~tr_edge_is_good.T] = -99
+            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1].T] = -99
+            big_row[:cs//2, cs//2:cs][~ch_edge_is_good.T] = -99
+            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good] = -99
+            big_col[big_row == -99] = -99
+            
+            valid_pairs = np.where(big_row != -99)
+            valid_pairs = self.left_iso_zone[
+                np.c_[valid_pairs[0], valid_pairs[1]]]
+            all_nodes = self.grid[valid_pairs]
+            # Calculate distance vector
+            r = all_nodes[:, 1] - all_nodes[:, 0]
+            dist = np.sum(r**2, axis=1)
+            angles = np.arctan2(r[:, 1], r[:, 0])
+            # Reject connecting to the same node
+            # bangles = angles[dist != 0]
+            # dist = dist[dist != 0]
+            dist = dist.flatten()
+            angles = angles.flatten()
+            this_material = self.materials[
+                    self.material_map[self.ny//2, 0]]
+            # If anisotropic, calculate incident angle
+            if self.mode == 'orientations':
+                orientation = self.property_map[self.ny//2, 0]
+                # Calculate group velocity based on the orientation and
+                # incident ray angles
+                cg = this_material.get_wavespeed(orientation, angles)
+            elif self.mode == 'slowness_iso':
+                # self.property_map contains per-cell slowness (isotropic)
+                # Consequently, material properties do not matter that much
+                cg = 1/self.property_map[self.ny//2, 0]**2
+            else:
+                print('Mode not implemented.')
+
+#            edge_cost = (dist[to_take, 0]**2 + dist[to_take, 1]**2)/cg
+            edge_cost = (dist/cg)**0.5
+            # edge_cost only contains rays from transducers to chamfer
+            # construct edge matrix with edges in both directions (but no edges between chamfer
+            # elements)
+            edge = np.zeros(big_row.shape)
+            edge[big_row != -99] = edge_cost
+
+            edge = edge[big_row != -99]
+            big_col = big_col[big_row != -99]
+            big_row = big_row[big_row != -99]
+            # cost = cost[temp_col != temp_row]
+            self.left_iso_rows = big_row.astype(int)
+            self.left_iso_cols = big_col.astype(int)
+            self.left_iso_edges = edge
+        
+        self.right_iso_rows, self.right_iso_cols = [], []
+        self.right_iso_edges = []
+        # Add right homogeneous zone
+        if self.right_iso_zone is not None:
+            # Go through possible connections; first top chamfer vs bottom chamfer (assumes
+            # pulse echo)
+            cham_x = self.grid[self.right_iso_chamfer, 0]
+            cham_y = self.grid[self.right_iso_chamfer, 1]           
+            mid_chamfer = self.right_iso_chamfer.shape[0]//2
+            mid_trans = self.right_iso_trans.shape[0]//2
+            top_n = np.arange(mid_chamfer)
+            bot_n = np.arange(mid_chamfer, mid_chamfer*2)
+            tt, bb = np.meshgrid(top_n, bot_n)
+            pairs = np.c_[tt.flatten(), bb.flatten()]
+            local_edges = self.grid[self.right_iso_chamfer[pairs]]
+            dist = -local_edges[:, 0] + local_edges[:, 1]
+            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
+                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
+                                                          - local_edges[:, 0, 1].reshape(-1, 1))
+            flag = cham_x.reshape(1, -1) <= interp_ray
+            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
+            ch_edge_is_good = []
+            for edge in range(flag.shape[0]):
+                ch_edge_is_good.append(flag[edge][pairs[edge, 0]:pairs[edge, 1]].all())
+            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer)
+            # do the same for tranducer vs chamfer 
+
+            top_n = np.arange(mid_trans) + 2*mid_chamfer
+            bot_n = np.arange(mid_chamfer*2)
+            tt, bb = np.meshgrid(top_n, bot_n)
+            pairs = np.c_[tt.flatten(), bb.flatten()]
+            local_edges = self.grid[self.right_iso_zone[pairs]]
+            dist = -local_edges[:, 0] + local_edges[:, 1]
+            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
+                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
+                                                          - local_edges[:, 0, 1].reshape(-1, 1))
+            flag = cham_x.reshape(1, -1) <= interp_ray
+            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
+            tr_edge_is_good = []
+            for edge in range(flag.shape[0]):
+                tr_edge_is_good.append(flag[edge][:pairs[edge, 1]].all())
+            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans)
+
+
+            cs = self.right_iso_chamfer.shape[0]
+            ts = self.right_iso_trans.shape[0]
+            big_row, big_col = np.meshgrid(self.right_iso_zone, self.right_iso_zone)
+            big_row[:cs//2, :cs//2] = -99
+            big_row[cs//2:-ts, cs//2:-ts] = -99
+            big_row[:-ts, cs:-ts//2][~tr_edge_is_good] = -99
+            big_row[:-ts, -ts//2:][~tr_edge_is_good[::-1]] = -99
+            big_row[cs:-ts//2, :-ts][~tr_edge_is_good.T] = -99
+            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1].T] = -99
+            big_row[:cs//2, cs//2:cs][~ch_edge_is_good.T] = -99
+            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good] = -99
+            big_col[big_row == -99] = -99
+            
+            valid_pairs = np.where(big_row != -99)
+            valid_pairs = self.right_iso_zone[
+                np.c_[valid_pairs[0], valid_pairs[1]]]
+            all_nodes = self.grid[valid_pairs]
+            # Calculate distance vector
+            r = all_nodes[:, 1] - all_nodes[:, 0]
+            dist = np.sum(r**2, axis=1)
+            angles = np.arctan2(r[:, 1], r[:, 0])
+            this_material = self.materials[
+                    self.material_map[self.ny//2, 0]]
+            # If anisotropic, calculate incident angle
+            if self.mode == 'orientations':
+                orientation = self.property_map[self.ny//2, 0]
+                # Calculate group velocity based on the orientation and
+                # incident ray angles
+                cg = this_material.get_wavespeed(orientation, angles)
+            elif self.mode == 'slowness_iso':
+                # self.property_map contains per-cell slowness (isotropic)
+                # Consequently, material properties do not matter that much
+                cg = 1/self.property_map[self.ny//2, 0]**2
+            else:
+                print('Mode not implemented.')
+
+#            edge_cost = (dist[to_take, 0]**2 + dist[to_take, 1]**2)/cg
+            edge_cost = (dist/cg)**0.5
+            # edge_cost only contains rays from transducers to chamfer
+            # construct edge matrix with edges in both directions (but no edges between chamfer
+            # elements)
+            edge = np.zeros(big_row.shape)
+            edge[big_row != -99] = edge_cost
+
+            edge = edge[big_row != -99]
+            big_col = big_col[big_row != -99]
+            big_row = big_row[big_row != -99]
+            # cost = cost[temp_col != temp_row]
+            self.right_iso_rows = big_row.astype(int)
+            self.right_iso_cols = big_col.astype(int)
+            self.right_iso_edges = edge
+
+
+
+        self.rows_w = np.array(rows)
+        self.cols_w = np.array(cols)
+        self.rows = np.concatenate((self.rows_w, self.left_iso_rows, self.right_iso_rows))
+        self.cols = np.concatenate((self.cols_w, self.left_iso_cols, self.right_iso_cols))
+
+
+    def update_edges(self, tie_link=[None, None]):
+        edges = np.zeros(self.rows_w.shape)
+        def assign_wavespeeds(pixel, trim_pixel):
+            this_material = self.materials[
+                    self.material_map.flatten()[pixel]]
+            if self.pixel_type[trim_pixel] == 0:
+                local_ang = self.angles
+                local_travel_d = self.travel_d
+            else:
+                local_ang = self.irregular_pixels[trim_pixel]['angles']
+                local_travel_d = self.irregular_pixels[trim_pixel]['travel_d']
+            # If anisotropic, calculate incident angle
+            if self.mode == 'orientations':
+                orientation = self.property_map.flatten()[
+                    pixel]
+                # Calculate group velocity based on the orientation and
+                # incident ray angles
+                cg = this_material.get_wavespeed(orientation, local_ang)
+            elif self.mode == 'slowness_iso':
+                # self.property_map contains per-cell slowness (isotropic)
+                # Consequently, material properties do not matter that much
+                cg = 1/self.property_map.flatten()[pixel]**2
+            else:
+                print('Mode not implemented.')
+
+            # Calculate cost (time) for edges originating from the current
+            # node
+            #edges.extend(np.repeat((local_travel_d/cg)**0.5, 2))
+            return np.tile((local_travel_d/cg)**0.5, 2)
+
+        position = 0
+        for full_pixel in trange(len(self.image_grid)):
+            if self.image_grid_lookup[full_pixel] == -1:
+                continue
+            else:
+                pixel = self.image_grid_lookup[full_pixel]
+                if self.pixel_type[pixel] == -1:
+                    continue
+            update = assign_wavespeeds(full_pixel, pixel)
+            edges[position:position + update.shape[0]] = update
+            position += update.shape[0]
+        # add isotropic regions
+        update = np.array(self.left_iso_edges)
+        edges = np.concatenate((edges, update))
+        position += update.shape[0]
+        update = np.array(self.right_iso_edges)
+        edges = np.concatenate((edges, update))
+
+#        self.rows = np.concatenate((self.rows, self.left_iso_rows, self.right_iso_rows))
+#        self.cols = np.concatenate((self.cols, self.left_iso_cols, self.right_iso_cols))
+#        edges = np.array(edges)
+        if tie_link[0] is not None and tie_link[1] is not None:
+            if len(tie_link[0]) == len(tie_link[1]):
+                self.rows.extend(list(tie_link[0]))
+                self.cols.extend(list(tie_link[1]))
+                edges.extend([0]*len(tie_link[0]))
+            else:
+                print('Tie link misdefined')
+
+        # Create a sparse matrix of graph edge lengths (times of flight)
+        self.edges = coo_matrix((edges, (self.cols, self.rows))).transpose().tocsr()
+
 
     def calculate_graph(self, tie_link=[None, None]):
         """
