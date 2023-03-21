@@ -23,7 +23,7 @@ from scipy.sparse import csr_matrix, coo_matrix
 import scipy.interpolate as interpolate
 from scipy.spatial import Voronoi
 from shapely.geometry import Polygon, Point
-
+import matplotlib.pyplot as plt
 import raytracer.refraction as rf
 
 def voronoi_finite_polygons_2d(vor, radius=None):
@@ -396,7 +396,7 @@ class RectGrid:
 
         self.property_map = property_map
 
-    def assign_materials(self, material_map, materials, left_add=0, right_add=0):
+    def assign_materials(self, material_map, materials, left_add=None, right_add=None):
         """
         Assign a dictionary mapping material map indices to WaveBasis objects
         and material map assigning the index from materials dictionary to each
@@ -411,7 +411,10 @@ class RectGrid:
         """
         self.materials = materials
         self.material_map = material_map
-        self.original_weld_mask = self.material_map[:, left_add:-right_add]
+        if right_add is not None:
+            self.original_weld_mask = self.material_map[:, left_add:-right_add]
+        else:
+            self.original_weld_mask = self.material_map[:, left_add:right_add]
 
     def add_points(self, sources=None, targets=None):
 
@@ -444,6 +447,12 @@ class RectGrid:
                 conc = [self.grid_1] + to_add
                 self.grid = np.concatenate(conc, axis=0)
 
+    def plot(self):
+        plt.figure()
+        plt.plot(self.grid[:, 0], self.grid[:, 1], 'x')
+        plt.gca().set_aspect('equal')
+        plt.show()
+
     def set_up_graph(self):
         rows = []
         cols = []
@@ -463,6 +472,9 @@ class RectGrid:
             take = (abs(self.grid[points] - self.image_grid[pixel])
                     <= self.pixel_size/2*1.001).all(axis=1)
             points = np.array(points)[take]
+            if len(points) < 2:
+                continue
+            
             points = points[np.lexsort(np.round(1e8*self.grid[points]).T)]
             # now are sorted from slow y fast x from bottom to top, from left to right
             self.r_closest[pixel] = points
@@ -510,7 +522,10 @@ class RectGrid:
 
 
     def update_edges(self, tie_link=[None, None]):
-        edges = np.zeros(self.rows.shape)
+        if type(self.rows) == np.ndarray:
+            edges = np.zeros(self.rows.shape)
+        else:
+            edges = np.zeros(len(self.rows))
         def assign_wavespeeds(pixel):
             this_material = self.materials[
                     self.material_map.flatten()[pixel]]
@@ -1113,6 +1128,10 @@ class SimplRectGrid:
 
     def trim_to_chamfer(self, a, b, c, mirror_domain=False):
         self.a, self.b, self.c = a, b, c
+        points_x = np.array([-c/2, -b/2, b/2, c/2])
+        points_y = np.array([a, 0, 0, a])
+        inter = interpolate.interp1d(points_x, points_y, kind='linear', bounds_error=False, fill_value=a)
+        self.weld_outline_int = inter
         weld_angle = np.arctan((c - b)/2/a)
         self.weld_angle = weld_angle
         
@@ -1149,7 +1168,7 @@ class SimplRectGrid:
                                             first_new_idx + 4*seed_x.shape[0])
         self.trimmed_by_outline = False
     
-    def trim_to_weld(self, weld_outline, mirror_domain=False):
+    def trim_to_weld(self, weld_outline, mirror_domain=False, seeds_vs_node_sp=0.25):
         self.trimmed_by_outline = True
         self.weld_outline = weld_outline
         weld_centre = np.argmin(weld_outline[:, 1]) 
@@ -1161,10 +1180,10 @@ class SimplRectGrid:
         node_spacing = self.pixel_size/self.no_seeds
         # total length of the weld outline
         total_length = np.linalg.norm(np.diff(weld_outline, axis=0), axis=1).sum()
-        seeds_per_chamfer = int(total_length/node_spacing)
+        seeds_per_chamfer = int(total_length/node_spacing*seeds_vs_node_sp)
         seed_x = np.linspace(weld_outline[0, 0], weld_outline[-1, 0],
                              seeds_per_chamfer + 1)
-        left_chamfer_seeds = sum(seed_x <= weld_outline[weld_centre, 0])
+        left_chamfer_seeds = sum(seed_x < weld_outline[weld_centre, 0])
         right_chamfer_seeds = sum(seed_x >= weld_outline[weld_centre, 0])
         seed_y = self.weld_outline_int(seed_x)
         if not mirror_domain:
@@ -1185,17 +1204,17 @@ class SimplRectGrid:
                                             first_new_idx + left_chamfer_seeds + right_chamfer_seeds)
         else:
             self.grid_1 = np.concatenate((self.grid_1[take],
-                                          np.column_stack((seed_x[:left_chamfer_seeds + 1],
-                                                           seed_y[:left_chamfer_seeds + 1])),
-                                          np.column_stack((seed_x[:left_chamfer_seeds + 1][::-1],
-                                                           -seed_y[:left_chamfer_seeds + 1][::-1])),
+                                          np.column_stack((seed_x[:left_chamfer_seeds ],
+                                                           seed_y[:left_chamfer_seeds ])),
+                                          np.column_stack((seed_x[:left_chamfer_seeds ][::-1],
+                                                           -seed_y[:left_chamfer_seeds][::-1])),
                                           np.column_stack((seed_x[left_chamfer_seeds:][::-1],
                                                            seed_y[left_chamfer_seeds:][::-1])),
                                           np.column_stack((seed_x[left_chamfer_seeds:],
                                                            -seed_y[left_chamfer_seeds:]))),axis=0)
-            self.left_iso_zone = np.arange(first_new_idx, first_new_idx + 2*left_chamfer_seeds + 2)
-            self.right_iso_zone = np.arange(first_new_idx + 2 + 2*left_chamfer_seeds,
-                                            first_new_idx + 2 + 2*left_chamfer_seeds +
+            self.left_iso_zone = np.arange(first_new_idx, first_new_idx + 2*left_chamfer_seeds)
+            self.right_iso_zone = np.arange(first_new_idx + 2*left_chamfer_seeds,
+                                            first_new_idx + 2*left_chamfer_seeds +
                                             2*right_chamfer_seeds)
             # add weld centre point to the left iso zone
 
@@ -1262,7 +1281,7 @@ class SimplRectGrid:
             cell_corners = self.image_grid[pixel] + np.array([[-half_size, -half_size, half_size,
                                                                half_size], [-half_size, half_size,
                                                                             -half_size, half_size]]).T
-            if (abs(cell_corners[:, 1]) >= self.weld_outline_int(cell_corners[:, 0])).any():
+            if (abs(cell_corners[:, 1]) > self.weld_outline_int(cell_corners[:, 0])).any():
                 mat_flat[pixel] = 1
                 prop_flat[pixel] = temp_props.flatten()[pixel]
 
@@ -1372,6 +1391,7 @@ class SimplRectGrid:
             take = (abs(self.grid[points] - self.image_grid_trim[pixel])
                     <= self.pixel_size/2*1.02).all(axis=1)
             points = np.array(points)[take]
+            points = points[self.grid[points, 1]*self.image_grid_trim[pixel, 1] > 0]
             points = points[np.lexsort(np.round(1e8*self.grid[points]).T)]
             if len(points) < 2:
                 single_counter += 1
@@ -1410,8 +1430,8 @@ class SimplRectGrid:
                 angles = np.arctan2(dist[:, 1], dist[:, 0])
                 travel_d = (dist**2).sum(axis=1)
                 self.irregular_pixels[pixel] = dict([('angles', angles),
-                                                        ('travel_d', travel_d),
-                                                        ('pairs', pairs)])
+                                                     ('travel_d', travel_d),
+                                                     ('pairs', pairs)])
                 row_pairs = pairs.flatten('F')
                 col_pairs = pairs[:, ::-1].flatten('F')
 
@@ -1446,7 +1466,7 @@ class SimplRectGrid:
             ch_edge_is_good = []
             for edge in range(flag.shape[0]):
                 ch_edge_is_good.append(flag[edge][pairs[edge, 0]:pairs[edge, 1]].all())
-            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer)
+            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer).T
             # do the same for tranducer vs chamfer 
 
             top_n = np.arange(mid_trans) + 2*mid_chamfer
@@ -1463,21 +1483,27 @@ class SimplRectGrid:
             tr_edge_is_good = []
             for edge in range(flag.shape[0]):
                 tr_edge_is_good.append(flag[edge][:pairs[edge, 1]].all())
-            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans)
+            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans).T
 
 
             cs = self.left_iso_chamfer.shape[0]
             ts = self.left_iso_trans.shape[0]
             big_row, big_col = np.meshgrid(self.left_iso_zone, self.left_iso_zone)
+            mask = np.ones([cs//2, cs//2])
+            iu = np.triu_indices(cs//2, 2)
+            mask[iu] = 0
+            mask[iu[1], iu[0]] = 0
             big_row[:cs//2, :cs//2] = -99
             big_row[cs//2:-ts, cs//2:-ts] = -99
-            big_row[:-ts, cs:-ts//2][~tr_edge_is_good] = -99
-            big_row[:-ts, -ts//2:][~tr_edge_is_good[::-1]] = -99
-            big_row[cs:-ts//2, :-ts][~tr_edge_is_good.T] = -99
-            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1].T] = -99
-            big_row[:cs//2, cs//2:cs][~ch_edge_is_good.T] = -99
-            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good] = -99
+
+            big_row[:-ts, cs:-ts//2][~tr_edge_is_good.T] = -99
+            big_row[:-ts, -ts//2:][~tr_edge_is_good.T] = -99
+            big_row[cs:-ts//2, :-ts][~tr_edge_is_good] = -99
+            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1]] = -99
+            big_row[:cs//2, cs//2:cs][~ch_edge_is_good] = -99
+            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good.T] = -99
             big_col[big_row == -99] = -99
+
             
             valid_pairs = np.where(big_row != -99)
             valid_pairs = self.left_iso_zone[
@@ -1547,7 +1573,7 @@ class SimplRectGrid:
             ch_edge_is_good = []
             for edge in range(flag.shape[0]):
                 ch_edge_is_good.append(flag[edge][pairs[edge, 0]:pairs[edge, 1]].all())
-            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer)
+            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer).T
             # do the same for tranducer vs chamfer 
 
             top_n = np.arange(mid_trans) + 2*mid_chamfer
@@ -1564,20 +1590,25 @@ class SimplRectGrid:
             tr_edge_is_good = []
             for edge in range(flag.shape[0]):
                 tr_edge_is_good.append(flag[edge][:pairs[edge, 1]].all())
-            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans)
+            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans).T
 
 
             cs = self.right_iso_chamfer.shape[0]
             ts = self.right_iso_trans.shape[0]
             big_row, big_col = np.meshgrid(self.right_iso_zone, self.right_iso_zone)
+            mask = np.ones([cs//2, cs//2])
+            iu = np.triu_indices(cs//2, 2)
+            mask[iu] = 0
+            mask[iu[1], iu[0]] = 0
             big_row[:cs//2, :cs//2] = -99
             big_row[cs//2:-ts, cs//2:-ts] = -99
-            big_row[:-ts, cs:-ts//2][~tr_edge_is_good] = -99
-            big_row[:-ts, -ts//2:][~tr_edge_is_good[::-1]] = -99
-            big_row[cs:-ts//2, :-ts][~tr_edge_is_good.T] = -99
-            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1].T] = -99
-            big_row[:cs//2, cs//2:cs][~ch_edge_is_good.T] = -99
-            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good] = -99
+
+            big_row[:-ts, cs:-ts//2][~tr_edge_is_good.T] = -99
+            big_row[:-ts, -ts//2:][~tr_edge_is_good.T] = -99
+            big_row[cs:-ts//2, :-ts][~tr_edge_is_good] = -99
+            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1]] = -99
+            big_row[:cs//2, cs//2:cs][~ch_edge_is_good] = -99
+            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good.T] = -99
             big_col[big_row == -99] = -99
             
             valid_pairs = np.where(big_row != -99)
@@ -1687,7 +1718,10 @@ class SimplRectGrid:
                 print('Tie link misdefined')
 
         # Create a sparse matrix of graph edge lengths (times of flight)
-        self.edges = coo_matrix((edges, (self.cols, self.rows))).transpose().tocsr()
+        cos = np.c_[self.cols, self.rows]
+        _, un_in = np.unique(cos, axis=0, return_index=True)
+        order = np.sort(un_in)
+        self.edges = coo_matrix((edges[order], (self.cols[order], self.rows[order]))).transpose().tocsr()
 
 
     def calculate_graph(self, tie_link=[None, None]):
