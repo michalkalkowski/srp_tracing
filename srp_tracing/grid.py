@@ -435,14 +435,14 @@ class RectGrid:
                 to_add.append(sources)
                 self.source_idx = np.arange(self.grid_1.shape[0],
                                             self.grid_1.shape[0]
-                                            + len(sources)).astype(np.int)
+                                            + len(sources)).astype(np.int64)
             if targets is not None:
                 to_add.append(targets)
                 self.target_idx = np.arange(self.grid_1.shape[0]
                                             + len(sources),
                                             self.grid_1.shape[0]
                                             + len(sources)
-                                            + len(targets)).astype(np.int)
+                                            + len(targets)).astype(np.int64)
             if len(to_add) > 0:
                 conc = [self.grid_1] + to_add
                 self.grid = np.concatenate(conc, axis=0)
@@ -574,7 +574,7 @@ class RectGrid:
         self.edges = coo_matrix((edges, (self.cols, self.rows))).transpose().tocsr()
 
 
-    def calculate_graph(self, tie_link=[None, None]):
+    def calculate_graph(self, tie_link=[None, None], water_links=[], c0=1.480):
         """
         Defines the connections between the nodes (graph edges) and calculates
         travel times for each edge.
@@ -638,6 +638,15 @@ class RectGrid:
                 edges.extend([0]*len(tie_link[0]))
             else:
                 print('Tie link misdefined')
+        if len(water_links) > 0:
+            for link in water_links:
+                # calculate flight times in water c0 must be in mm/us, positions are in mm
+                tof = np.linalg.norm(self.grid[link[0]][np.newaxis, :, :] 
+                                     - self.grid[link[1]][:, np.newaxis, :], axis=2)/c0
+                row_i, col_i = np.meshgrid(link[0], link[1])
+                rows.extend(list(row_i.flatten()) + list(col_i.flatten()))
+                cols.extend(list(col_i.flatten()) + list(row_i.flatten()))
+                edges.extend(tof.flatten().tolist() + tof.T.flatten().tolist())
         self.cols = cols
         self.rows = rows
         # Create a sparse matrix of graph edge lengths (times of flight)
@@ -907,7 +916,7 @@ class ZonesGrid:
             self.grid = np.append(self.grid, nodes_to_add, axis=0)
             self.source_idx = np.arange(self.grid.shape[0]
                                         - len(sources),
-                                        self.grid.shape[0]).astype(np.int)
+                                        self.grid.shape[0]).astype(np.int64)
         if targets is None:
             self.grid = self.grid
         else:
@@ -963,7 +972,7 @@ class ZonesGrid:
             self.grid = np.append(self.grid, nodes_to_add, axis=0)
             self.target_idx = np.arange(self.grid.shape[0]
                                         - len(targets),
-                                        self.grid.shape[0]).astype(np.int)
+                                        self.grid.shape[0]).astype(np.int64)
 
         # Calculate zone centroids
         self.zone_centroids = np.zeros([len(self.zones_edge_ind), 2])
@@ -1365,6 +1374,19 @@ class SimplRectGrid:
         self.right_iso_trans = add_pos[take_pos]
         self.right_iso_zone = np.append(self.right_iso_zone,
                                        add_pos[take_pos])
+
+        mask_receiver = [self.left_iso_trans[ix] in self.target_idx
+                         for ix in range(len(self.left_iso_trans))]
+        self.left_iso_targets = self.left_iso_trans[mask_receiver]
+        self.left_iso_sources = self.left_iso_trans[~np.array(mask_receiver)]
+        mask_receiver = [self.right_iso_trans[ix] in self.target_idx
+                         for ix in range(len(self.right_iso_trans))]
+        self.right_iso_targets = self.right_iso_trans[mask_receiver]
+        self.right_iso_sources = self.right_iso_trans[~np.array(mask_receiver)]
+        self.left_iso_nodes = np.array(list(set(self.left_iso_zone)
+                                            - set(self.left_iso_targets)))
+        self.right_iso_nodes = np.array(list(set(self.right_iso_zone)
+                                            - set(self.right_iso_targets)))
 
     def set_up_graph(self):
         rows = []
@@ -1851,6 +1873,7 @@ class SimplRectGrid:
             edges.extend(edge_cost)
             #distances.extend(dist[mask])
 
+
         # Add right homogeneous zone
         if self.right_iso_zone is not None:
             local_grid = self.grid[self.right_iso_zone]
@@ -1890,6 +1913,9 @@ class SimplRectGrid:
             cols.extend(col_indices)
             edges.extend(edge_cost)
             #distances.extend(dist[mask])
+
+
+
 
         if tie_link[0] is not None and tie_link[1] is not None:
             if len(tie_link[0]) == len(tie_link[1]):

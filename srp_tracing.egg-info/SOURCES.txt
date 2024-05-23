@@ -8,3 +8,13 @@ srp_tracing.egg-info/PKG-INFO
 srp_tracing.egg-info/SOURCES.txt
 srp_tracing.egg-info/dependency_links.txt
 srp_tracing.egg-info/top_level.txt
+tests/test_arbitrary_map_simpl.py
+tests/test_convergence_rect_ogilvy.py
+tests/test_convergence_rect_ogilvy_1mm.py
+tests/test_mina.py
+tests/test_mina_simpl.py
+tests/test_ogilvy.py
+tests/test_ogilvy_backwall.py
+tests/test_ogilvy_simpl.py
+tests/test_ogilvy_simpl_backwall.py
+tests/test_zones.py

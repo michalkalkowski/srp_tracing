@@ -87,7 +87,7 @@ weld_basis.calculate_wavespeeds(angles_from_ray=True)
 cx = -0
 cy = 19
 
-nos_seeds = np.array([1, 2, 4, 8, 10, 15])
+nos_seeds = np.array([1, 2, 4, 6, 8, 10, 12, 14])
 
 tofs_conv = np.zeros([len(nos_seeds), 32, 32])
 for i in range(len(nos_seeds)):
@@ -104,34 +104,56 @@ for i in range(len(nos_seeds)):
     test.solve(source_indices=test_grid.source_idx, with_points=False)
     tofs_conv[i] = test.tfs[:, test_grid.target_idx].T[32:, :32]
 
-target = np.load('../data/SRP_validation_ogilvy.npy')[32:, :32]*1e6
+
+#target = np.load('../data/SRP_validation_ogilvy.npy')[32:, :32]*1e6
+target = np.load('../data/SRP_validation_ogilvy_square_5e6_aic08e3.npy')[32:, :32]*1e6
 
 relative = abs(tofs_conv - target)/target
 absolute = abs(tofs_conv - target)
+absolute_conv = abs(tofs_conv - tofs_conv[-1])
 
 # Relative error
 fig, ax = plt.subplots()
-ax.plot(nos_seeds, np.nanmean(relative*100, axis=(1, 2)), '-o')
-ax2 = ax.twinx()
-ax2.set_ylabel('absolute time of flight mean error in us', color='C1')
-ax2.plot(nos_seeds, np.nanmean(absolute, axis=(1, 2)), '-o', ms=10,
-         mfc='None', c='C1')
+ax.semilogy(nos_seeds, np.nanmean(absolute, axis=(1, 2)), '-o', ms=10,
+         mfc='None')
 ax.set_xlabel('nodes per pixel edge')
-ax.set_ylabel('relative time of flight mean error in %')
+ax.set_ylabel('absolute time of flight mean error in us')
 plt.tight_layout()
 plt.show()
-ax2.set_yticklabels(ax2.get_yticklabels(), c='C1')
 
 
 # Relative error
 fig, ax = plt.subplots()
-ax.plot(nos_seeds, np.nanmax(relative*100, axis=(1, 2)), '-o')
-ax2 = ax.twinx()
-ax2.set_ylabel('absolute time of flight max error in us', color='C1')
-ax2.plot(nos_seeds, np.nanmax(absolute, axis=(1, 2)), '-o', ms=10,
-         mfc='None', c='C1')
+ax.semilogy(nos_seeds, np.nanmax(absolute, axis=(1, 2)), '-o', ms=10,
+         mfc='None')
 ax.set_xlabel('nodes per pixel edge')
-ax.set_ylabel('relative time of flight max error in %')
+ax.set_ylabel('absolute time of flight max error in us')
 plt.tight_layout()
 plt.show()
-ax2.set_yticklabels(ax2.get_yticklabels(), c='C1')
+
+# # Relative error
+# fig, ax = plt.subplots()
+# ax.semilogy(nos_seeds, np.nanmean(relative*100, axis=(1, 2)), '-o')
+# ax2 = ax.twinx()
+# ax2.set_ylabel('absolute time of flight mean error in us', color='C1')
+# ax2.semilogy(nos_seeds, np.nanmean(absolute, axis=(1, 2)), '-o', ms=10,
+#          mfc='None', c='C1')
+# ax.set_xlabel('nodes per pixel edge')
+# ax.set_ylabel('relative time of flight mean error in %')
+# plt.tight_layout()
+# plt.show()
+# ax2.set_yticklabels(ax2.get_yticklabels(), c='C1')
+# 
+# 
+# # Relative error
+# fig, ax = plt.subplots()
+# ax.semilogy(nos_seeds, np.nanmax(relative*100, axis=(1, 2)), '-o')
+# ax2 = ax.twinx()
+# ax2.set_ylabel('absolute time of flight max error in us', color='C1')
+# ax2.semilogy(nos_seeds, np.nanmax(absolute, axis=(1, 2)), '-o', ms=10,
+#          mfc='None', c='C1')
+# ax.set_xlabel('nodes per pixel edge')
+# ax.set_ylabel('relative time of flight max error in %')
+# plt.tight_layout()
+# plt.show()
+# ax2.set_yticklabels(ax2.get_yticklabels(), c='C1')
