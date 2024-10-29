@@ -1388,7 +1388,7 @@ class SimplRectGrid:
         self.right_iso_nodes = np.array(list(set(self.right_iso_zone)
                                             - set(self.right_iso_targets)))
 
-    def set_up_graph(self):
+    def set_up_graph_direct(self):
         rows = []
         cols = []
 
@@ -1463,7 +1463,7 @@ class SimplRectGrid:
         mats = [mat.anisotropy for k, mat in self.materials.items()]
         if mats.count(0) > 0:
             cg_iso = self.materials[mats.index(0)].get_wavespeed(0, 0)
-            self.iso_tofs = (self.travel_d/cg_iso)**0.5
+            #self.iso_tofs = (self.travel_d/cg_iso)**0.5
         self.left_iso_rows, self.left_iso_cols = [], []
         self.left_iso_edges = []
         # Add left homogeneous zone
@@ -1472,104 +1472,20 @@ class SimplRectGrid:
             # pulse echo)
             cham_x = self.grid[self.left_iso_chamfer, 0]
             cham_y = self.grid[self.left_iso_chamfer, 1]           
-            mid_chamfer = self.left_iso_chamfer.shape[0]//2
-            mid_trans = self.left_iso_trans.shape[0]//2
-            top_n = np.arange(mid_chamfer)
-            bot_n = np.arange(mid_chamfer, mid_chamfer*2)
-            tt, bb = np.meshgrid(top_n, bot_n)
-            pairs = np.c_[tt.flatten(), bb.flatten()]
-            local_edges = self.grid[self.left_iso_chamfer[pairs]]
-            dist = -local_edges[:, 0] + local_edges[:, 1]
-            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
-                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
-                                                          - local_edges[:, 0, 1].reshape(-1, 1))
-            flag = cham_x.reshape(1, -1) >= interp_ray
-            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
-            ch_edge_is_good = []
-            for edge in range(flag.shape[0]):
-                ch_edge_is_good.append(flag[edge][pairs[edge, 0]:pairs[edge, 1]].all())
-            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer).T
             # do the same for tranducer vs chamfer 
-
-            top_n = np.arange(mid_trans) + 2*mid_chamfer
-            bot_n = np.arange(mid_chamfer*2)
-            tt, bb = np.meshgrid(top_n, bot_n)
+            tt, bb = np.meshgrid(self.left_iso_sources, np.r_[self.left_iso_chamfer, self.left_iso_targets])
             pairs = np.c_[tt.flatten(), bb.flatten()]
-            local_edges = self.grid[self.left_iso_zone[pairs]]
-            dist = -local_edges[:, 0] + local_edges[:, 1]
-            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
-                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
-                                                          - local_edges[:, 0, 1].reshape(-1, 1))
-            flag = cham_x.reshape(1, -1) >= interp_ray
-            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
-            tr_edge_is_good = []
-            for edge in range(flag.shape[0]):
-                tr_edge_is_good.append(flag[edge][:pairs[edge, 1]].all())
-            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans).T
-
-
-            cs = self.left_iso_chamfer.shape[0]
-            ts = self.left_iso_trans.shape[0]
-            big_row, big_col = np.meshgrid(self.left_iso_zone, self.left_iso_zone)
-            mask = np.ones([cs//2, cs//2])
-            iu = np.triu_indices(cs//2, 2)
-            mask[iu] = 0
-            mask[iu[1], iu[0]] = 0
-            big_row[:cs//2, :cs//2] = -99
-            big_row[cs//2:-ts, cs//2:-ts] = -99
-
-            big_row[:-ts, cs:-ts//2][~tr_edge_is_good.T] = -99
-            big_row[:-ts, -ts//2:][~tr_edge_is_good.T] = -99
-            big_row[cs:-ts//2, :-ts][~tr_edge_is_good] = -99
-            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1]] = -99
-            big_row[:cs//2, cs//2:cs][~ch_edge_is_good] = -99
-            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good.T] = -99
-            big_col[big_row == -99] = -99
-
-            
-            valid_pairs = np.where(big_row != -99)
-            valid_pairs = self.left_iso_zone[
-                np.c_[valid_pairs[0], valid_pairs[1]]]
-            all_nodes = self.grid[valid_pairs]
-            # Calculate distance vector
-            r = all_nodes[:, 1] - all_nodes[:, 0]
-            dist = np.sum(r**2, axis=1)
-            angles = np.arctan2(r[:, 1], r[:, 0])
-            # Reject connecting to the same node
-            # bangles = angles[dist != 0]
-            # dist = dist[dist != 0]
-            dist = dist.flatten()
-            angles = angles.flatten()
-            this_material = self.materials[
-                    self.material_map[self.ny//2, 0]]
-            # If anisotropic, calculate incident angle
-            if self.mode == 'orientations':
-                orientation = self.property_map[self.ny//2, 0]
-                # Calculate group velocity based on the orientation and
-                # incident ray angles
-                cg = this_material.get_wavespeed(orientation, angles)
-            elif self.mode == 'slowness_iso':
-                # self.property_map contains per-cell slowness (isotropic)
-                # Consequently, material properties do not matter that much
-                cg = 1/self.property_map[self.ny//2, 0]**2
-            else:
-                print('Mode not implemented.')
-
-#            edge_cost = (dist[to_take, 0]**2 + dist[to_take, 1]**2)/cg
+            local_edges = self.grid[pairs]
+            r = local_edges[:, 1,: ] - local_edges[:, 0, :]
+            dist = np.sum(r**2, axis=-1)
+            cg = self.materials[0].get_wavespeed(0, 0)
             edge_cost = (dist/cg)**0.5
-            # edge_cost only contains rays from transducers to chamfer
-            # construct edge matrix with edges in both directions (but no edges between chamfer
-            # elements)
-            edge = np.zeros(big_row.shape)
-            edge[big_row != -99] = edge_cost
-
-            edge = edge[big_row != -99]
-            big_col = big_col[big_row != -99]
-            big_row = big_row[big_row != -99]
-            # cost = cost[temp_col != temp_row]
-            self.left_iso_rows = big_row.astype(int)
-            self.left_iso_cols = big_col.astype(int)
-            self.left_iso_edges = edge
+            # Double up - reverse pairs
+            pairs_two_way = np.r_[pairs, pairs[:, ::-1]]
+            edge_cost_two_way = np.r_[edge_cost, edge_cost]
+            self.left_iso_rows = pairs_two_way[:, 0].astype(int)
+            self.left_iso_cols = pairs_two_way[:, 1].astype(int)
+            self.left_iso_edges = edge_cost_two_way
         
         self.right_iso_rows, self.right_iso_cols = [], []
         self.right_iso_edges = []
@@ -1579,101 +1495,20 @@ class SimplRectGrid:
             # pulse echo)
             cham_x = self.grid[self.right_iso_chamfer, 0]
             cham_y = self.grid[self.right_iso_chamfer, 1]           
-            mid_chamfer = self.right_iso_chamfer.shape[0]//2
-            mid_trans = self.right_iso_trans.shape[0]//2
-            top_n = np.arange(mid_chamfer)
-            bot_n = np.arange(mid_chamfer, mid_chamfer*2)
-            tt, bb = np.meshgrid(top_n, bot_n)
-            pairs = np.c_[tt.flatten(), bb.flatten()]
-            local_edges = self.grid[self.right_iso_chamfer[pairs]]
-            dist = -local_edges[:, 0] + local_edges[:, 1]
-            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
-                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
-                                                          - local_edges[:, 0, 1].reshape(-1, 1))
-            flag = cham_x.reshape(1, -1) <= interp_ray
-            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
-            ch_edge_is_good = []
-            for edge in range(flag.shape[0]):
-                ch_edge_is_good.append(flag[edge][pairs[edge, 0]:pairs[edge, 1]].all())
-            ch_edge_is_good = np.array(ch_edge_is_good).reshape(mid_chamfer, mid_chamfer).T
             # do the same for tranducer vs chamfer 
-
-            top_n = np.arange(mid_trans) + 2*mid_chamfer
-            bot_n = np.arange(mid_chamfer*2)
-            tt, bb = np.meshgrid(top_n, bot_n)
+            tt, bb = np.meshgrid(self.right_iso_sources, np.r_[self.right_iso_chamfer, self.right_iso_targets])
             pairs = np.c_[tt.flatten(), bb.flatten()]
-            local_edges = self.grid[self.right_iso_zone[pairs]]
-            dist = -local_edges[:, 0] + local_edges[:, 1]
-            interp_ray = local_edges[:, 0, 0].reshape(-1, 1) \
-                + (dist[:, 0]/dist[:, 1]).reshape(-1, 1)*(cham_y.reshape(1, -1)
-                                                          - local_edges[:, 0, 1].reshape(-1, 1))
-            flag = cham_x.reshape(1, -1) <= interp_ray
-            flag[np.isclose(cham_x.reshape(1, -1), interp_ray, atol=1e-8)] = True
-            tr_edge_is_good = []
-            for edge in range(flag.shape[0]):
-                tr_edge_is_good.append(flag[edge][:pairs[edge, 1]].all())
-            tr_edge_is_good = np.array(tr_edge_is_good).reshape(2*mid_chamfer, mid_trans).T
-
-
-            cs = self.right_iso_chamfer.shape[0]
-            ts = self.right_iso_trans.shape[0]
-            big_row, big_col = np.meshgrid(self.right_iso_zone, self.right_iso_zone)
-            mask = np.ones([cs//2, cs//2])
-            iu = np.triu_indices(cs//2, 2)
-            mask[iu] = 0
-            mask[iu[1], iu[0]] = 0
-            big_row[:cs//2, :cs//2] = -99
-            big_row[cs//2:-ts, cs//2:-ts] = -99
-
-            big_row[:-ts, cs:-ts//2][~tr_edge_is_good.T] = -99
-            big_row[:-ts, -ts//2:][~tr_edge_is_good.T] = -99
-            big_row[cs:-ts//2, :-ts][~tr_edge_is_good] = -99
-            big_row[-ts//2:, :-ts][~tr_edge_is_good[::-1]] = -99
-            big_row[:cs//2, cs//2:cs][~ch_edge_is_good] = -99
-            big_row[cs//2:-ts, :cs//2][~ch_edge_is_good.T] = -99
-            big_col[big_row == -99] = -99
-            
-            valid_pairs = np.where(big_row != -99)
-            valid_pairs = self.right_iso_zone[
-                np.c_[valid_pairs[0], valid_pairs[1]]]
-            all_nodes = self.grid[valid_pairs]
-            # Calculate distance vector
-            r = all_nodes[:, 1] - all_nodes[:, 0]
-            dist = np.sum(r**2, axis=1)
-            angles = np.arctan2(r[:, 1], r[:, 0])
-            this_material = self.materials[
-                    self.material_map[self.ny//2, 0]]
-            # If anisotropic, calculate incident angle
-            if self.mode == 'orientations':
-                orientation = self.property_map[self.ny//2, 0]
-                # Calculate group velocity based on the orientation and
-                # incident ray angles
-                cg = this_material.get_wavespeed(orientation, angles)
-            elif self.mode == 'slowness_iso':
-                # self.property_map contains per-cell slowness (isotropic)
-                # Consequently, material properties do not matter that much
-                cg = 1/self.property_map[self.ny//2, 0]**2
-            else:
-                print('Mode not implemented.')
-
-#            edge_cost = (dist[to_take, 0]**2 + dist[to_take, 1]**2)/cg
+            local_edges = self.grid[pairs]
+            r = local_edges[:, 1,: ] - local_edges[:, 0, :]
+            dist = np.sum(r**2, axis=-1)
+            cg = self.materials[0].get_wavespeed(0, 0)
             edge_cost = (dist/cg)**0.5
-            # edge_cost only contains rays from transducers to chamfer
-            # construct edge matrix with edges in both directions (but no edges between chamfer
-            # elements)
-            edge = np.zeros(big_row.shape)
-            edge[big_row != -99] = edge_cost
-
-            edge = edge[big_row != -99]
-            big_col = big_col[big_row != -99]
-            big_row = big_row[big_row != -99]
-            # cost = cost[temp_col != temp_row]
-            self.right_iso_rows = big_row.astype(int)
-            self.right_iso_cols = big_col.astype(int)
-            self.right_iso_edges = edge
-
-
-
+            # Double up - reverse pairs
+            pairs_two_way = np.r_[pairs, pairs[:, ::-1]]
+            edge_cost_two_way = np.r_[edge_cost, edge_cost]
+            self.right_iso_rows = pairs_two_way[:, 0].astype(int)
+            self.right_iso_cols = pairs_two_way[:, 1].astype(int)
+            self.right_iso_edges = edge_cost_two_way
         self.rows_w = np.array(rows)
         self.cols_w = np.array(cols)
         self.rows = np.concatenate((self.rows_w, self.left_iso_rows, self.right_iso_rows))
