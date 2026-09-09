@@ -1,11 +1,17 @@
-Metadata-Version: 2.1
-Name: srp-tracing
+Metadata-Version: 2.4
+Name: srp_tracing
 Version: 0.0.0
 Summary: Shortest ray path tracing
 Author: Michal Kalkowski
 Author-email: m.kalkowski@imperial.ac.uk
 License: MIT
 License-File: LICENSE
+Dynamic: author
+Dynamic: author-email
+Dynamic: description
+Dynamic: license
+Dynamic: license-file
+Dynamic: summary
 
 srp_tracing
 ==============================

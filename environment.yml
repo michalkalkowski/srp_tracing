@@ -1,4 +1,4 @@
-name: srp_tomo 
+name: srp_tomo
 channels: !!python/tuple
 - conda-forge
 - defaults
@@ -11,4 +11,14 @@ dependencies:
 - conda-forge::numpy
 - conda-forge::scipy
 - conda-forge::h5py
+- conda-forge::shapely
+- conda-forge::tqdm
+- pip
+- pip:
+  # Sibling, unpublished package providing the Ogilvy grain-orientation
+  # model used by examples/ and tests/test_ogilvy_validation.py. Path is
+  # relative to the directory `conda env create -f environment.yml` is run
+  # from (this repo's root), and assumes the sibling layout this repo has
+  # always used: srp_tracing/ and ogilvy_weld/ under the same parent dir.
+  - -e ../ogilvy_weld
 

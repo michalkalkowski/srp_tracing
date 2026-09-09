@@ -9,7 +9,14 @@ setup(
     description="Shortest ray path tracing",
     author="Michal Kalkowski",
     author_email="m.kalkowski@imperial.ac.uk",
-    packages=find_packages(exclude=['data', 'references', 'output', 'notebooks']),
+    packages=find_packages(exclude=['data', 'references', 'output', 'notebooks', 'archive']),
     long_description=read('README.md'),
-    license='MIT'
+    license='MIT',
+    install_requires=[
+        'numpy',
+        'scipy',
+        'tqdm',
+        'shapely',
+        'matplotlib',
+    ],
 )
