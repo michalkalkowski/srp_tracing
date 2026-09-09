@@ -12,14 +12,16 @@ Solver functions.
 Copyright (C) Michal K Kalkowski (MIT License)
 """
 
+from typing import Any, Optional
+
 import numpy as np
 from tqdm import trange
-import scipy.sparse.csgraph._shortest_path as sp
-import scipy.spatial.qhull as qhull
-from scipy.spatial import cKDTree
+from scipy.sparse.csgraph import shortest_path
+from scipy.spatial import Delaunay, cKDTree
 
 
-def interp_weights(xyz, uvw, d=2):
+def interp_weights(xyz: np.ndarray, uvw: np.ndarray,
+                   d: int = 2) -> tuple[np.ndarray, np.ndarray]:
     """
     Fast interpolation of multiple datasets over the same grid
     from: https://stackoverflow.com/a/20930910/2197375
@@ -36,7 +38,7 @@ def interp_weights(xyz, uvw, d=2):
     weights: ndarray, interpolation weights
     """
 
-    tri = qhull.Delaunay(xyz)
+    tri = Delaunay(xyz)
     simplex = tri.find_simplex(uvw)
     vertices = np.take(tri.simplices, simplex, axis=0)
     temp = np.take(tri.transform, simplex, axis=0)
@@ -45,7 +47,8 @@ def interp_weights(xyz, uvw, d=2):
     return vertices, np.hstack((bary, 1 - bary.sum(axis=1, keepdims=True)))
 
 
-def interpolate(values, vtx, wts, dim=3):
+def interpolate(values: np.ndarray, vtx: np.ndarray, wts: np.ndarray,
+                dim: int = 3) -> np.ndarray:
     """
     Fast interpolation of multiple datasets over the same grid
     from: https://stackoverflow.com/a/20930910/2197375
@@ -73,10 +76,10 @@ class Solver:
     grid: object, an SRP grid
     """
 
-    def __init__(self, grid):
+    def __init__(self, grid: Any):
         self.grid = grid
 
-    def solve(self, source_indices, with_points=False):
+    def solve(self, source_indices: np.ndarray, with_points: bool = False) -> None:
         """
         Runs the shortest path solver on the previously defined grid from
         specified source indices. It may optionally return points to
@@ -92,17 +95,18 @@ class Solver:
         self.sources = source_indices
         #print('SRP search...')
         if with_points:
-            self.tfs, self.points = sp.shortest_path(
+            self.tfs, self.points = shortest_path(
                 self.grid.edges,
                 return_predecessors=with_points,
                 indices=source_indices)
         else:
-            self.tfs = sp.shortest_path(self.grid.edges,
-                                        return_predecessors=with_points,
-                                        indices=source_indices)
+            self.tfs = shortest_path(self.grid.edges,
+                                     return_predecessors=with_points,
+                                     indices=source_indices)
         #print('Search ended.')
 
-    def interpolate_tf_field(self, external=False, external_grid=None):
+    def interpolate_tf_field(self, external: bool = False,
+                             external_grid: Optional[np.ndarray] = None) -> np.ndarray:
         """
         Interpolates the time of flight field to a regular grid.
 
@@ -138,7 +142,7 @@ class Solver:
             [-2, -2, -1], [0, 1, 1]].mean(axis=0)
         return tf_grid
 
-    def calculate_ray_paths(self, end=[]):
+    def calculate_ray_paths(self, end: list = []) -> dict:
         """
         Extracts ray paths from TFT data based on the SRP solver outcome
 
