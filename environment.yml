@@ -15,10 +15,12 @@ dependencies:
 - conda-forge::tqdm
 - pip
 - pip:
-  # Sibling, unpublished package providing the Ogilvy grain-orientation
-  # model used by examples/ and tests/test_ogilvy_validation.py. Path is
-  # relative to the directory `conda env create -f environment.yml` is run
-  # from (this repo's root), and assumes the sibling layout this repo has
-  # always used: srp_tracing/ and ogilvy_weld/ under the same parent dir.
+  # Sibling, unpublished packages providing the grain-orientation models
+  # used by examples/ and tests/test_*_validation.py. Paths are relative
+  # to the directory `conda env create -f environment.yml` is run from
+  # (this repo's root), and assume the sibling layout this repo has always
+  # used: srp_tracing/, ogilvy_weld/, and mina_weld/ under the same parent
+  # directory.
   - -e ../ogilvy_weld
+  - -e ../mina_weld
 

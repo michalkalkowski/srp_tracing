@@ -75,18 +75,24 @@ sources = targets = np.r_[np.column_stack((sx, sy)),
                           np.column_stack((sx, np.zeros(len(sy))))]
 
 # Properties
+# c in GPa (numeric value), rho in g/cm^3 (numeric value): together these
+# give wavespeeds in mm/us directly -- see WaveBasis.set_material_props's
+# docstring. (Previously scaled by 1e3/1e-9, six orders of magnitude off
+# this convention -- see examples/test_ogilvy.py for the same material
+# given correctly, and WaveBasis.calculate_wavespeeds's plausibility
+# warning, which flags exactly this mistake.)
 orientation_map = orientations
-rho_parent = 7.9e-9
+rho_parent = 7.9
 # Define weld material
-rho_weld = 8.0e-9
-c_parent = 1e3*np.array(
+rho_weld = 8.0
+c_parent = np.array(
     [[255.61, 95.89, 95.89, 0., 0., 0.],
      [95.89, 255.61, 95.89, 0., 0., 0.],
      [95.89, 95.89, 255.61, 0., 0., 0.],
      [0., 0., 0., 79.86, 0., 0.],
      [0., 0., 0., 0., 79.86, 0.],
      [0., 0., 0., 0., 0., 79.86]])
-c_weld = 1e3*np.array([[262, 148, 160, 0, 0, 0],
+c_weld = np.array([[262, 148, 160, 0, 0, 0],
                        [148, 262, 160, 0, 0, 0],
                        [160, 160, 229, 0, 0, 0],
                        [0, 0, 0, 82, 0, 0],
@@ -119,8 +125,8 @@ test.solve(source_indices=test_grid.source_idx, with_points=True)
 tofs_srp = test.tfs[:, test_grid.target_idx].T
 tofs_srp[:32, :32] = np.nan
 tofs_srp[32:, 32:] = np.nan
-target_4MHz = np.load('../data/SRP_validation_mina_4MHz.npy')
-target = np.load('../data/SRP_validation_mina.npy')
+target_4MHz = np.load('../data/SRP_validation_mina_4MHz.npy')*1e6
+target = np.load('../data/SRP_validation_mina.npy')*1e6
 target[:32, :32] = np.nan
 target_4MHz[:32, :32] = np.nan
 
@@ -135,7 +141,7 @@ plt.plot(tofs_srp[:, 5],  lw=1,  c='red', label='SRP')
 plt.plot(tofs_srp[:, 15], lw=1, c='red')
 plt.plot(tofs_srp[:, 31 - 5], lw=1, c='red')
 plt.xlabel('sensor #')
-plt.ylabel('time of flight in s')
+plt.ylabel('time of flight in us')
 plt.legend()
 plt.tight_layout()
 plt.show()
