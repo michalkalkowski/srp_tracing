@@ -470,6 +470,92 @@ class _ModeDependentMaterial:
         self.materials = materials
         self.material_map = material_map
 
+    def connect_all_pairs(self, node_indices: np.ndarray, this_material: WaveBasis,
+                          property_value: float | np.ndarray
+                          ) -> tuple[list, list, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Fully connects every pair of nodes in node_indices (both
+        directions, excluding self-pairs) with an edge cost of
+        distance / wavespeed, for a single, homogeneous material/property
+        value shared by the whole set -- the core operation of every
+        calculate_graph(): a pixel's boundary nodes, a zone's boundary
+        nodes, or an isotropic side-zone's nodes are all "one set of nodes
+        that should be pairwise connected", differing only in which nodes
+        and which material/property apply. Pulled out here because this
+        exact computation was duplicated near-verbatim across
+        SimplRectGrid.calculate_graph (three times: the main pixel loop and
+        both isotropic side zones) and ZonesGrid.calculate_graph.
+
+        Parameters:
+        ---
+        node_indices: ndarray, node indices to fully connect
+        this_material: WaveBasis, the material for this set of nodes
+        property_value: float or ndarray, this set's entry from
+                        property_map (orientation or slowness, depending on
+                        mode -- see wavespeed_squared_for)
+
+        Returns:
+        ---
+        rows, cols: list[int], node index pairs (i != j), both directions
+        edge_cost: ndarray, travel time for each (rows[k], cols[k])
+        dist: ndarray, the underlying euclidean distance for each pair
+        angles: ndarray, the underlying direction (radians) for each pair
+        """
+        local_grid = self.grid[node_indices]
+        r = -local_grid[:, :2][:, np.newaxis, :] + local_grid[:, :2][np.newaxis, :, :]
+        dist = np.linalg.norm(r, axis=2)
+        angles = np.arctan2(r[:, :, 1], r[:, :, 0])
+        dist = dist.flatten()
+        angles = angles.flatten()
+        cg = self.wavespeed_squared_for(this_material, property_value, angles)
+        edge_cost = dist/cg**0.5
+
+        temp_col, temp_row = np.meshgrid(node_indices, node_indices)
+        not_diagonal = (temp_col != temp_row).flatten()
+        rows = list(temp_row[temp_row != temp_col])
+        cols = list(temp_col[temp_col != temp_row])
+        edge_cost = edge_cost.reshape(temp_col.shape)[temp_col != temp_row]
+        return rows, cols, edge_cost, dist[not_diagonal], angles[not_diagonal]
+
+    def pairwise_pair_geometry(self, node_indices: np.ndarray
+                               ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        For a set of node_indices, describes every ordered combination of
+        two points in the set: which pair (as positions within
+        node_indices), the direction and squared distance between them,
+        and flattened row/col index templates ready to be reused against
+        any other same-sized node set (see set_up_graph in RectGrid/
+        SimplRectGrid: this is the per-pixel template it precomputes once
+        for a "standard" (fully-seeded) cell and reuses for every other
+        cell of the same shape, and recomputes directly for irregular
+        cells -- identical either way, just applied to a different
+        node_indices).
+
+        Parameters:
+        ---
+        node_indices: ndarray, node indices to pair up
+
+        Returns:
+        ---
+        pairs: ndarray (n_pairs, 2), int, each row a pair of *positions*
+               within node_indices (not node indices themselves)
+        angles: ndarray (n_pairs,), direction (radians) from pairs[:, 0] to
+                pairs[:, 1]
+        travel_d_squared: ndarray (n_pairs,), squared distance for each pair
+        row_pairs, col_pairs: ndarray, node_indices[row_pairs]/
+                              node_indices[col_pairs] give the pair's two
+                              endpoints in both directions (see callers)
+        """
+        local_ind = np.arange(len(node_indices))
+        pairs = np.array(list(combinations(local_ind, 2)))
+        local_edges = self.grid[node_indices][pairs, :]
+        dist = -local_edges[:, 0] + local_edges[:, 1]
+        angles = np.arctan2(dist[:, 1], dist[:, 0])
+        travel_d_squared = (dist**2).sum(axis=1)
+        row_pairs = pairs.flatten('F')
+        col_pairs = pairs[:, ::-1].flatten('F')
+        return pairs, angles, travel_d_squared, row_pairs, col_pairs
+
 
 class RectGrid(_ModeDependentMaterial):
     """
@@ -599,31 +685,18 @@ class RectGrid(_ModeDependentMaterial):
                 # Standard cell:
                 if first is True:
                     # pre calculate angles and distances
-                    local_ind = np.arange(points.shape[0])
-                    pairs = np.array(list(combinations(local_ind, 2)))
-                    local_edges = self.grid[points][pairs, :]
-                    dist = -local_edges[:, 0] + local_edges[:, 1]
-                    self.angles = np.arctan2(dist[:, 1], dist[:, 0])
-                    self.travel_d_squared = (dist**2).sum(axis=1)
-                    self.pairs = pairs
-                    self.row_pairs = pairs.flatten('F')
-                    self.col_pairs = pairs[:, ::-1].flatten('F')
+                    (self.pairs, self.angles, self.travel_d_squared,
+                     self.row_pairs, self.col_pairs) = self.pairwise_pair_geometry(points)
                     first = False
                 row_pairs = self.row_pairs
                 col_pairs = self.col_pairs
             else:
                 self.pixel_type[pixel] = 1
-                local_ind = np.arange(points.shape[0])
-                pairs = np.array(list(combinations(local_ind, 2)))
-                local_edges = self.grid[points][pairs, :]
-                dist = -local_edges[:, 0] + local_edges[:, 1]
-                angles = np.arctan2(dist[:, 1], dist[:, 0])
-                travel_d_squared = (dist**2).sum(axis=1)
+                pairs, angles, travel_d_squared, row_pairs, col_pairs = \
+                    self.pairwise_pair_geometry(points)
                 self.pixels_with_sources[pixel] = dict([('angles', angles),
                                                         ('travel_d_squared', travel_d_squared),
                                                         ('pairs', pairs)])
-                row_pairs = pairs.flatten('F')
-                col_pairs = pairs[:, ::-1].flatten('F')
 
             rows.extend(points[row_pairs])
             cols.extend(points[col_pairs])
@@ -740,30 +813,13 @@ class RectGrid(_ModeDependentMaterial):
             # In case the search circle went outside the pixel, filter out
             take = (abs(self.grid[points] - self.image_grid[pixel])
                     <= self.pixel_size/2*PIXEL_BOUNDARY_TOL_FACTOR).all(axis=1)
-            points = list(np.array(points)[take])
-            for point in points:
-                neighbours = points[:]
-                neighbours.remove(point)
-                if len(neighbours) == 0:
-                    break
-                neighbours = np.array(neighbours)
-                dist = (-self.grid[point] + self.grid[neighbours])
-                angles = np.arctan2(dist[:, 1], dist[:, 0])
-                to_take = np.array([True]*len(angles))
-                this_material = self.materials[
-                        self.material_map.flatten()[pixel]]
-                # If anisotropic, calculate incident angle
-                angles = angles[to_take]
-                cg = self.wavespeed_squared_for(
-                    this_material, self.property_map.flatten()[pixel], angles)
-                # Calculate cost (time) for edges originating from the current
-                # node
-                edge_cost = (dist[to_take, 0]**2 + dist[to_take, 1]**2)/cg
-                rows_local = [point]*len(neighbours[to_take])
-                edges_local = edge_cost**0.5
-                rows.extend(rows_local)
-                cols.extend(list(neighbours[to_take]))
-                edges.extend(edges_local)
+            points = np.array(points)[take]
+            this_material = self.materials[self.material_map.flatten()[pixel]]
+            rows_local, cols_local, edges_local, _, _ = self.connect_all_pairs(
+                points, this_material, self.property_map.flatten()[pixel])
+            rows.extend(rows_local)
+            cols.extend(cols_local)
+            edges.extend(edges_local)
         if tie_link[0] is not None and tie_link[1] is not None:
             if len(tie_link[0]) == len(tie_link[1]):
                 rows.extend(list(tie_link[0]))
@@ -1097,30 +1153,15 @@ class ZonesGrid(_ModeDependentMaterial):
             for local_edge in self.zones_edge_ind[this_zone]:
                 indices.append(np.where(self.grid[:, 2] == local_edge)[0])
             indices = np.concatenate(indices)
-            local_grid = self.grid[indices]
-            # Calculate distance vector
-            r = -local_grid[:, :2][:, np.newaxis, :] + local_grid[:, :2][np.newaxis, :, :]
-            dist = np.linalg.norm(r, axis=2)
-            angles = np.arctan2(r[:, :, 1], r[:, :, 0])
-            # Reject connecting to the same node
-            dist = dist.flatten()
-            angles = angles.flatten()
             this_material = self.materials[self.material_map[this_zone]]
-            # If anisotropic, calculate incident angle
-            cg = self.wavespeed_squared_for(this_material, self.property_map[this_zone], angles)
-            edge_cost = dist/cg**0.5
-            
-            temp_col, temp_row = np.meshgrid(indices, indices)
-            mask = (temp_col != temp_row).flatten()
-            col_indices = list(temp_col[temp_col != temp_row])
-            row_indices = list(temp_row[temp_row != temp_col])
-            edge_cost = edge_cost.reshape(temp_col.shape)[temp_col != temp_row]
+            row_indices, col_indices, edge_cost, dist, angles = self.connect_all_pairs(
+                indices, this_material, self.property_map[this_zone])
             rows.extend(row_indices)
             cols.extend(col_indices)
             edges.extend(edge_cost)
-            distances.extend(dist[mask])
+            distances.extend(dist)
             zone_labels.extend(np.array([this_zone]*len(row_indices)))
-            glob_angles.extend(angles[mask])
+            glob_angles.extend(angles)
         if tie_link[0] is not None and tie_link[1] is not None:
             if len(tie_link[0]) == len(tie_link[1]):
                 rows.extend(list(tie_link[0]))
@@ -1457,31 +1498,18 @@ class SimplRectGrid(_ModeDependentMaterial):
                 # Standard cell:
                 if first is True:
                     # pre calculate angles and distances
-                    local_ind = np.arange(points.shape[0])
-                    pairs = np.array(list(combinations(local_ind, 2)))
-                    local_edges = self.grid[points][pairs, :]
-                    dist = -local_edges[:, 0] + local_edges[:, 1]
-                    self.angles = np.arctan2(dist[:, 1], dist[:, 0])
-                    self.travel_d_squared = (dist**2).sum(axis=1)
-                    self.pairs = pairs
-                    self.row_pairs = pairs.flatten('F')
-                    self.col_pairs = pairs[:, ::-1].flatten('F')
+                    (self.pairs, self.angles, self.travel_d_squared,
+                     self.row_pairs, self.col_pairs) = self.pairwise_pair_geometry(points)
                     first = False
                 row_pairs = self.row_pairs
                 col_pairs = self.col_pairs
             else:
                 self.pixel_type[pixel] = 1
-                local_ind = np.arange(points.shape[0])
-                pairs = np.array(list(combinations(local_ind, 2)))
-                local_edges = self.grid[points][pairs, :]
-                dist = -local_edges[:, 0] + local_edges[:, 1]
-                angles = np.arctan2(dist[:, 1], dist[:, 0])
-                travel_d_squared = (dist**2).sum(axis=1)
+                pairs, angles, travel_d_squared, row_pairs, col_pairs = \
+                    self.pairwise_pair_geometry(points)
                 self.irregular_pixels[pixel] = dict([('angles', angles),
                                                      ('travel_d_squared', travel_d_squared),
                                                      ('pairs', pairs)])
-                row_pairs = pairs.flatten('F')
-                col_pairs = pairs[:, ::-1].flatten('F')
 
             rows.extend(points[row_pairs])
             cols.extend(points[col_pairs])
@@ -1769,87 +1797,30 @@ class SimplRectGrid(_ModeDependentMaterial):
                 print('no points')
                 continue
                 
-            local_grid = self.grid[(np.array(points)[take])]
             points = np.array(points)
-            # Calculate distance vector
-            r = -local_grid[:, :2][:, np.newaxis, :] + local_grid[:, :2][np.newaxis, :, :]
-            dist = np.linalg.norm(r, axis=2)
-            angles = np.arctan2(r[:, :, 1], r[:, :, 0])
-            # Reject connecting to the same node
-            dist = dist.flatten()
-            angles = angles.flatten()
-            this_material = self.materials[self.material_map.flatten()[
-                    full_pixel]]
-            # If anisotropic, calculate incident angle
-            cg = self.wavespeed_squared_for(
-                this_material, self.property_map.flatten()[full_pixel], angles)
-
-            edge_cost = dist/cg**0.5
-            temp_col, temp_row = np.meshgrid(points[take], points[take])
-            mask = (temp_col != temp_row).flatten()
-            col_indices = list(temp_col[temp_col != temp_row])
-            row_indices = list(temp_row[temp_row != temp_col])
-            edge_cost = edge_cost.reshape(temp_col.shape)[temp_col != temp_row]
+            this_material = self.materials[self.material_map.flatten()[full_pixel]]
+            row_indices, col_indices, edge_cost, _, _ = self.connect_all_pairs(
+                points[take], this_material, self.property_map.flatten()[full_pixel])
             rows.extend(row_indices)
             cols.extend(col_indices)
             edges.extend(edge_cost)
         # Add left homogeneous zone
         if self.left_iso_zone is not None:
-            local_grid = self.grid[self.left_iso_zone]
-            # Calculate distance vector
-            r = -local_grid[:, :2][:, np.newaxis, :] + local_grid[:, :2][np.newaxis, :, :]
-            dist = np.linalg.norm(r, axis=2)
-            angles = np.arctan2(r[:, :, 1], r[:, :, 0])
-            # Reject connecting to the same node
-            dist = dist.flatten()
-            angles = angles.flatten()
-            this_material = self.materials[
-                    self.material_map[self.ny//2, 0]]
-            # If anisotropic, calculate incident angle
-            cg = self.wavespeed_squared_for(
-                this_material, self.property_map[self.ny//2, 0], angles)
-
-            edge_cost = dist/cg**0.5
-            
-            temp_col, temp_row = np.meshgrid(self.left_iso_zone, self.left_iso_zone)
-            mask = (temp_col != temp_row).flatten()
-            col_indices = list(temp_col[temp_col != temp_row])
-            row_indices = list(temp_row[temp_row != temp_col])
-            edge_cost = edge_cost.reshape(temp_col.shape)[temp_col != temp_row]
+            this_material = self.materials[self.material_map[self.ny//2, 0]]
+            row_indices, col_indices, edge_cost, _, _ = self.connect_all_pairs(
+                self.left_iso_zone, this_material, self.property_map[self.ny//2, 0])
             rows.extend(row_indices)
             cols.extend(col_indices)
             edges.extend(edge_cost)
-
 
         # Add right homogeneous zone
         if self.right_iso_zone is not None:
-            local_grid = self.grid[self.right_iso_zone]
-            # Calculate distance vector
-            r = -local_grid[:, :2][:, np.newaxis, :] + local_grid[:, :2][np.newaxis, :, :]
-            dist = np.linalg.norm(r, axis=2)
-            angles = np.arctan2(r[:, :, 1], r[:, :, 0])
-            # Reject connecting to the same node
-            dist = dist.flatten()
-            angles = angles.flatten()
-            this_material = self.materials[
-                    self.material_map[self.ny//2, -1]]
-            # If anisotropic, calculate incident angle
-            cg = self.wavespeed_squared_for(
-                this_material, self.property_map[self.ny//2, -1], angles)
-
-            edge_cost = dist/cg**0.5
-            
-            temp_col, temp_row = np.meshgrid(self.right_iso_zone, self.right_iso_zone)
-            mask = (temp_col != temp_row).flatten()
-            col_indices = list(temp_col[temp_col != temp_row])
-            row_indices = list(temp_row[temp_row != temp_col])
-            edge_cost = edge_cost.reshape(temp_col.shape)[temp_col != temp_row]
+            this_material = self.materials[self.material_map[self.ny//2, -1]]
+            row_indices, col_indices, edge_cost, _, _ = self.connect_all_pairs(
+                self.right_iso_zone, this_material, self.property_map[self.ny//2, -1])
             rows.extend(row_indices)
             cols.extend(col_indices)
             edges.extend(edge_cost)
-
-
-
 
         if tie_link[0] is not None and tie_link[1] is not None:
             if len(tie_link[0]) == len(tie_link[1]):
