@@ -556,6 +556,64 @@ class _ModeDependentMaterial:
         col_pairs = pairs[:, ::-1].flatten('F')
         return pairs, angles, travel_d_squared, row_pairs, col_pairs
 
+    @staticmethod
+    def _append_tie_link(rows: list, cols: list, edges: list, tie_link: list) -> None:
+        """
+        Appends a zero-cost edge for every (row, col) pair in tie_link,
+        forcing those node pairs to be treated as coincident by the solver
+        -- e.g. tying a source sitting exactly on a shared boundary to the
+        node that already represents it. Shared between RectGrid.
+        calculate_graph and SimplRectGrid.calculate_graph (previously
+        duplicated byte-for-byte in each).
+
+        Parameters:
+        ---
+        rows, cols, edges: list, the in-progress edge-list accumulators;
+                           mutated in place.
+        tie_link: list, [row_indices, col_indices] or [None, None] (no-op).
+        """
+        if tie_link[0] is not None and tie_link[1] is not None:
+            if len(tie_link[0]) == len(tie_link[1]):
+                rows.extend(list(tie_link[0]))
+                cols.extend(list(tie_link[1]))
+                edges.extend([0]*len(tie_link[0]))
+            else:
+                raise ValueError("tie_link[0] and tie_link[1] must have the same length")
+
+    def _append_water_links(self, rows: list, cols: list, edges: list,
+                            water_links: list, c0: float) -> None:
+        """
+        Appends direct edges (both directions) between every node in
+        indices_a and every node in indices_b, for each (indices_a,
+        indices_b) pair in water_links, at a cost of straight_line_distance
+        / c0 -- see RectGrid.calculate_graph's water_links parameter for the
+        physical rationale. Shared between RectGrid.calculate_graph and
+        SimplRectGrid.calculate_graph.
+
+        Parameters:
+        ---
+        rows, cols, edges: list, the in-progress edge-list accumulators;
+                           mutated in place.
+        water_links: list, [(indices_a, indices_b), ...], see
+                    RectGrid.calculate_graph's docstring.
+        c0: float, wavespeed in the water_links medium, mm/us.
+        """
+        for link0, link1 in water_links:
+            link0 = np.asarray(link0)
+            link1 = np.asarray(link1)
+            # shape (len(link0), len(link1)), matching row0/col0 below
+            # exactly, so the same flattened cost array is valid for both
+            # edge directions (distance is symmetric) without needing a
+            # separately-flattened transpose -- see calculate_graph's
+            # water_links docstring for the bug this avoids.
+            tof = np.linalg.norm(
+                self.grid[link0][:, np.newaxis, :] - self.grid[link1][np.newaxis, :, :],
+                axis=2)/c0
+            row0, col0 = np.meshgrid(link0, link1, indexing='ij')
+            rows.extend(row0.flatten().tolist() + col0.flatten().tolist())
+            cols.extend(col0.flatten().tolist() + row0.flatten().tolist())
+            edges.extend(tof.flatten().tolist()*2)
+
 
 class RectGrid(_ModeDependentMaterial):
     """
@@ -820,34 +878,9 @@ class RectGrid(_ModeDependentMaterial):
             rows.extend(rows_local)
             cols.extend(cols_local)
             edges.extend(edges_local)
-        if tie_link[0] is not None and tie_link[1] is not None:
-            if len(tie_link[0]) == len(tie_link[1]):
-                rows.extend(list(tie_link[0]))
-                cols.extend(list(tie_link[1]))
-                edges.extend([0]*len(tie_link[0]))
-            else:
-                raise ValueError("tie_link[0] and tie_link[1] must have the same length")
+        self._append_tie_link(rows, cols, edges, tie_link)
         if len(water_links) > 0:
-            for link0, link1 in water_links:
-                link0 = np.asarray(link0)
-                link1 = np.asarray(link1)
-                # calculate flight times in water c0 must be in mm/us, positions are in mm
-                # shape (len(link0), len(link1)), matching row0/col0 below exactly, so
-                # the same flattened cost array is valid for both edge directions
-                # (distance is symmetric) without needing a separately-flattened
-                # transpose -- a previous version paired row_i/col_i (built from
-                # np.meshgrid, shape (len(link1), len(link0))) with tof.flatten() for
-                # the forward edges but tof.T.flatten() for the reverse ones; those
-                # have different shapes whenever len(link0) != len(link1), so the two
-                # flattenings walk the pairs in different orders and silently mismatch
-                # roughly half the reverse-direction edges with the wrong distance.
-                tof = np.linalg.norm(
-                    self.grid[link0][:, np.newaxis, :] - self.grid[link1][np.newaxis, :, :],
-                    axis=2)/c0
-                row0, col0 = np.meshgrid(link0, link1, indexing='ij')
-                rows.extend(row0.flatten().tolist() + col0.flatten().tolist())
-                cols.extend(col0.flatten().tolist() + row0.flatten().tolist())
-                edges.extend(tof.flatten().tolist()*2)
+            self._append_water_links(rows, cols, edges, water_links, c0)
         self.cols = cols
         self.rows = rows
         # Create a sparse matrix of graph edge lengths (times of flight)
@@ -1766,13 +1799,18 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.edges = build_edge_matrix(rows, cols, edges)
 
 
-    def calculate_graph(self, tie_link: list = [None, None]) -> None:
+    def calculate_graph(self, tie_link: list = [None, None], water_links: list = [],
+                        c0: float = 1.480) -> None:
         """
         Defines the connections between the nodes (graph edges) and calculates
         travel times for each edge.
 
         Parameters:
         ---
+        water_links: list, optional [(indices_a, indices_b), ...] -- see
+                     RectGrid.calculate_graph's docstring; supported here
+                     identically.
+        c0: float, wavespeed in the water_links medium, mm/us.
         """
         edges = []
         rows = []
@@ -1822,17 +1860,126 @@ class SimplRectGrid(_ModeDependentMaterial):
             cols.extend(col_indices)
             edges.extend(edge_cost)
 
-        if tie_link[0] is not None and tie_link[1] is not None:
-            if len(tie_link[0]) == len(tie_link[1]):
-                rows.extend(list(tie_link[0]))
-                cols.extend(list(tie_link[1]))
-                edges.extend([0]*len(tie_link[0]))
-            else:
-                raise ValueError("tie_link[0] and tie_link[1] must have the same length")
+        self._append_tie_link(rows, cols, edges, tie_link)
+        if len(water_links) > 0:
+            self._append_water_links(rows, cols, edges, water_links, c0)
 
         # Create a sparse matrix of graph edge lengths (times of flight)
         self.edges = build_edge_matrix(rows, cols, edges)
 
+
+class WeldGrid:
+    """
+    A single grid API for both chamfer styles: chamfer='staircase' behaves
+    like RectGrid (the weld/parent boundary follows the material_map's
+    per-pixel resolution); chamfer='smooth' behaves like SimplRectGrid (the
+    boundary is trimmed to the exact analytic chamfer line via
+    trim_to_chamfer/simplify_grid). Internally this wraps a plain RectGrid
+    or SimplRectGrid instance -- chosen once, at construction, by chamfer --
+    and forwards to it; RectGrid/SimplRectGrid are unchanged and remain the
+    classes any existing external caller should keep using directly. This
+    class exists so *new* code (immersion/wedge/relay examples) can pick
+    the chamfer style with one constructor argument instead of choosing
+    between two differently-shaped classes.
+
+    Attribute access not defined here (e.g. .grid, .edges, .source_idx,
+    .target_idx, .image_grid, .materials -- everything Solver and the
+    relay helpers in solver.py read) passes through to the wrapped
+    RectGrid/SimplRectGrid instance via __getattr__.
+    """
+
+    def __init__(self, nx: int, ny: int, cx: float, cy: float, pixel_size: float,
+                no_seeds: int, chamfer: str = 'staircase') -> None:
+        """
+        Parameters:
+        ---
+        nx, ny, cx, cy, pixel_size, no_seeds: see RectGrid.__init__ --
+            identical for both chamfer styles.
+        chamfer: 'staircase' (default, RectGrid-style) or 'smooth'
+                 (SimplRectGrid-style, requires calling trim_to_chamfer()
+                 then simplify_grid() before add_points()).
+        """
+        if chamfer not in ('staircase', 'smooth'):
+            raise ValueError(f"chamfer must be 'staircase' or 'smooth', got {chamfer!r}")
+        self.chamfer = chamfer
+        impl_cls = RectGrid if chamfer == 'staircase' else SimplRectGrid
+        self._impl = impl_cls(nx, ny, cx, cy, pixel_size, no_seeds)
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for attributes not found on WeldGrid itself (normal
+        # __getattr__ semantics) -- e.g. .grid, .edges, .source_idx,
+        # .image_grid, .materials, computed by the wrapped instance.
+        return getattr(self._impl, name)
+
+    def assign_model(self, mode: str, property_map: Optional[np.ndarray] = None,
+                     weld_model: Any = None, only_weld: bool = False) -> None:
+        self._impl.assign_model(mode, property_map=property_map,
+                                weld_model=weld_model, only_weld=only_weld)
+
+    def assign_materials(self, material_map: np.ndarray, materials: dict, **kwargs) -> None:
+        """
+        See RectGrid.assign_materials/SimplRectGrid.assign_materials.
+        chamfer='staircase' accepts the extra left_add/right_add kwargs
+        RectGrid.assign_materials supports; chamfer='smooth' does not
+        (that trimming instead happens in simplify_grid's left_add/
+        right_add) -- passing them raises a TypeError from the wrapped
+        call, same as calling SimplRectGrid.assign_materials directly.
+        """
+        self._impl.assign_materials(material_map, materials, **kwargs)
+
+    def add_points(self, sources: Optional[np.ndarray] = None,
+                   targets: Optional[np.ndarray] = None) -> None:
+        """
+        One coordinate-array convention regardless of chamfer style --
+        unlike SimplRectGrid.add_points, sources/targets are always raw
+        (n, 2) coordinate arrays here, never index arrays into a combined
+        points array. For chamfer='smooth' this is translated into
+        SimplRectGrid's points/index-array convention internally.
+        """
+        if self.chamfer == 'staircase':
+            self._impl.add_points(sources=sources, targets=targets)
+        else:
+            if sources is None or targets is None:
+                raise ValueError(
+                    "WeldGrid(chamfer='smooth') requires both sources and targets")
+            sources = np.asarray(sources)
+            targets = np.asarray(targets)
+            points = np.concatenate((sources, targets), axis=0)
+            s_ix = np.arange(len(sources))
+            t_ix = np.arange(len(sources), len(sources) + len(targets))
+            self._impl.add_points(points=points, sources=s_ix, targets=t_ix)
+
+    def trim_to_chamfer(self, a: float, b: float, c: float,
+                        mirror_domain: bool = False) -> None:
+        """Only meaningful for chamfer='smooth' -- for chamfer='staircase'
+        the weld/parent boundary comes from assign_materials's
+        material_map instead, so there is nothing to trim to."""
+        if self.chamfer != 'smooth':
+            raise NotImplementedError(
+                "trim_to_chamfer is only available for chamfer='smooth'; "
+                "chamfer='staircase' gets its boundary from assign_materials's "
+                "material_map.")
+        self._impl.trim_to_chamfer(a, b, c, mirror_domain=mirror_domain)
+
+    def simplify_grid(self, left_add: int = 0, right_add: int = 0) -> None:
+        """Only meaningful for chamfer='smooth'; see trim_to_chamfer."""
+        if self.chamfer != 'smooth':
+            raise NotImplementedError(
+                "simplify_grid is only available for chamfer='smooth'.")
+        self._impl.simplify_grid(left_add=left_add, right_add=right_add)
+
+    def calculate_graph(self, tie_link: list = [None, None], water_links: list = [],
+                        c0: float = 1.480) -> None:
+        """See RectGrid.calculate_graph -- identical parameters/behaviour
+        for both chamfer styles (SimplRectGrid gained water_links support
+        specifically so this could be a straight passthrough)."""
+        self._impl.calculate_graph(tie_link=tie_link, water_links=water_links, c0=c0)
+
+    def set_up_graph(self) -> None:
+        self._impl.set_up_graph()
+
+    def update_edges(self, tie_link: list = [None, None]) -> None:
+        self._impl.update_edges(tie_link=tie_link)
 
 
             # Calculate distance vector
