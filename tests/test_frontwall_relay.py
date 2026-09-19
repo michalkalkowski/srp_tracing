@@ -39,7 +39,13 @@ def test_single_interface_transmission_matches_fermat_minimum(isotropic_material
     v_solid = 5.9
     transducer = np.array([-6.0, 8.0])   # in water, y > 0
     solid_point = np.array([4.0, -7.0])  # in the solid, y < 0
-    frontwall_x = np.arange(-20.0, 20.0, 0.05)
+    # 0.2 spacing bounds the discretization error in discretized_x to at
+    # most half a spacing (0.1), matching the assertion's tolerance below;
+    # a single pixel connects every frontwall point to every other point
+    # directly (see calculate_graph), so this is O(n^2) in point count --
+    # finer spacing here costs quadratically more without tightening either
+    # assertion.
+    frontwall_x = np.arange(-20.0, 20.0, 0.2)
     frontwall = np.column_stack((frontwall_x, np.zeros_like(frontwall_x)))
 
     # single pixel must be large enough to contain every point used (both
