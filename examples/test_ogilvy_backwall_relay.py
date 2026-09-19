@@ -143,9 +143,9 @@ plt.show()
 
 
 # Plotting a reflected ray path
-source_node = test_grid.source_idx[10]
-target_node = test_grid.source_idx[14]
-via_node = test_grid.target_idx[via_index[10, 14]]
+source_node = test_grid.source_idx[7]
+target_node = test_grid.source_idx[15]
+via_node = test_grid.target_idx[via_index[7, 15]]
 path = test.calculate_relay_ray_path(source_node, target_node, via_node)
 
 gx = -dx/2 + np.append(np.unique(test_grid.image_grid[:, 0]),

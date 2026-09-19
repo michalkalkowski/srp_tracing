@@ -17,6 +17,7 @@ from ogilvy.ogilvy_model import Ogilvy_weld as o_weld
 a = 36.8
 b = 1.
 c = 40
+dx = 1
 
 # initial map
 
@@ -26,7 +27,7 @@ oweld_parameters = dict([('T', 2),
                         ('b', b),
                         ('c', c)])
 oweld = o_weld(oweld_parameters)
-oweld.define_grid_size(2, use_centroids=True, add_boundary_cells=True,
+oweld.define_grid_size(dx, use_centroids=True, add_boundary_cells=True,
                        boundary_offset=1.)
 oweld.solve()
 
@@ -36,8 +37,8 @@ oweld.solve()
 orientations = oweld.grain_orientations_full[:]
 bb = orientations[:]
 weld_mask = np.copy(oweld.in_weld)
-aa = np.zeros([bb.shape[0], 6])
-cc = np.zeros([bb.shape[0], 6])
+aa = np.zeros([bb.shape[0], int(6*2/dx)])
+cc = np.zeros([bb.shape[0], int(6*2/dx)])
 orientations = np.column_stack((aa, bb, cc))
 new_wm = np.column_stack((aa, weld_mask, cc))
 
@@ -46,7 +47,6 @@ orientations[new_wm != 1] = 0
 
 nx = orientations.shape[1]
 ny = orientations.shape[0]
-dx = 2
 
 # Sensors
 start_gen = -32.55
@@ -86,7 +86,7 @@ weld_basis.set_material_props(c_weld, rho_weld)
 weld_basis.calculate_wavespeeds(angles_from_ray=True)
 
 cx = 0
-cy = 19
+cy = 18.5
 
 no_seeds = 8
 
