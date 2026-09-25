@@ -1454,8 +1454,16 @@ class SimplRectGrid(_ModeDependentMaterial):
             take_pos = (abs(self.grid[add_pos, 1]) 
                       < np.tan(np.pi/2 - self.weld_angle)*(self.grid[add_pos, 0] - self.b/2))
         else:
-            take_neg = self.grid[add_neg, 0] < self.weld_outline[0, 0]
-            take_pos = self.grid[add_pos, 0] > self.weld_outline[-1, 0]
+            # A point is in the isotropic parent metal if it lies beyond the
+            # horizontal extent of the outline or below the outline, i.e. in
+            # the parent metal under a flank (like the chamfer test above; a
+            # point of the backwall in a relay is such a point)
+            take_neg = ((self.grid[add_neg, 0] < self.weld_outline[0, 0])
+                        | (abs(self.grid[add_neg, 1])
+                           < self.weld_outline_int(self.grid[add_neg, 0])))
+            take_pos = ((self.grid[add_pos, 0] > self.weld_outline[-1, 0])
+                        | (abs(self.grid[add_pos, 1])
+                           < self.weld_outline_int(self.grid[add_pos, 0])))
 
         self.left_iso_chamfer = np.copy(self.left_iso_zone)
         self.right_iso_chamfer = np.copy(self.right_iso_zone)
