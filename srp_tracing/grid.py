@@ -1306,10 +1306,12 @@ class SimplRectGrid(_ModeDependentMaterial):
             self.right_iso_zone = np.arange(first_new_idx + 2*seed_x.shape[0],
                                             first_new_idx + 4*seed_x.shape[0])
         self.trimmed_by_outline = False
+        self.mirror_domain = mirror_domain
     
     def trim_to_weld(self, weld_outline: np.ndarray, mirror_domain: bool = False,
                      seeds_vs_node_sp: float = 0.25) -> None:
         self.trimmed_by_outline = True
+        self.mirror_domain = mirror_domain
         self.weld_outline = weld_outline
         weld_centre = np.argmin(weld_outline[:, 1]) 
         self.weld_outline_int = interpolate.interp1d(weld_outline[:, 0], weld_outline[:, 1], 
@@ -1487,6 +1489,88 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.right_iso_nodes = np.array(list(set(self.right_iso_zone)
                                             - set(self.right_iso_targets)))
 
+    def _visible_zone_edges_wanted(self) -> bool:
+        """
+        Whether set_up_graph builds the zone edges with _visible_zone_edges().
+        The attribute zone_edges says: 'visible' (always) or 'mirrored' (the
+        rule written for a domain mirrored about the backwall: top and bottom
+        halves of the outline, no chords between nodes of the outline on the
+        same side). Unset, a mirrored domain keeps its own rule and any other
+        domain uses 'visible', the only one that can work there. 'visible'
+        gives, in a mirrored domain too, the same times as calculate_graph()
+        (the chords that calculate_graph() adds across the weld never
+        matter), where the mirrored rule differs by up to ~0.06 us on the
+        EDF weld.
+        """
+        mode = getattr(self, 'zone_edges', None)
+        if mode is None:
+            return not self.mirror_domain
+        if mode not in ('visible', 'mirrored'):
+            raise ValueError("zone_edges must be 'visible' or 'mirrored'")
+        return mode == 'visible'
+
+    def _visible_zone_edges(self, side: str
+                            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Straight-ray edges of the isotropic parent zone on one side ('left' or
+        'right') of a domain that is *not* mirrored about the backwall (the
+        real domain, with a relay, or transducers on both surfaces).
+
+        The zone is made of the nodes of the outline (left/right_iso_chamfer,
+        one polyline from the top of the weld to its root) and of the added
+        points that lie in the parent metal (left/right_iso_trans:
+        transducers, backwall points of a relay). The zone lies to the left
+        (right) of the outline. A pair of nodes is joined by a straight ray,
+        in both directions (each with the cost of its own direction), if
+        the segment stays in the zone, i.e. does not cross the outline: at no
+        vertex of the outline within the segment's range of y is the segment
+        beyond it. This includes the chords between two nodes of the outline
+        (a ray that leaves the weld for a moment through the parent metal
+        takes a straight chord instead of a chain of pixel edges, which is
+        slightly longer); the mirrored domain leaves them out, and setting
+        the attribute zone_outline_chords to False does so here. Each pair
+        gives one edge in each direction, and a pair that is also connected
+        through a pixel keeps the cheaper of the two (build_edge_matrix), so
+        nothing is counted twice.
+
+        Returns:
+        ---
+        rows, cols: ndarray, node indices of the edges
+        edges: ndarray, the time of flight of each
+        """
+        zone = np.asarray(getattr(self, side + '_iso_zone'))
+        chamfer = np.asarray(getattr(self, side + '_iso_chamfer'))
+        column = 0 if side == 'left' else -1
+        beyond_sign = 1 if side == 'left' else -1
+        points = self.grid[zone, :2]
+        vertex_x, vertex_y = self.grid[chamfer, 0], self.grid[chamfer, 1]
+        first, second = np.triu_indices(len(zone), k=1)
+        a, b = points[first], points[second]
+        # not between two nodes of the outline
+        in_outline = np.isin(zone, chamfer)
+        wanted = (np.ones(len(first), dtype=bool)
+                  if getattr(self, 'zone_outline_chords', True)
+                  else ~(in_outline[first] & in_outline[second]))
+        first, second, a, b = first[wanted], second[wanted], a[wanted], b[wanted]
+        dy = b[:, 1] - a[:, 1]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            along = (vertex_y[None, :] - a[:, 1:2])/dy[:, None]
+        chord_x = a[:, 0:1] + along*(b[:, 0:1] - a[:, 0:1])
+        within = (along >= -1e-9) & (along <= 1 + 1e-9) & (dy[:, None] != 0)
+        beyond = beyond_sign*(chord_x - vertex_x[None, :]) > CHAMFER_BOUNDARY_MATCH_TOL
+        visible = ~(within & beyond).any(axis=1)
+        first, second, a, b = first[visible], second[visible], a[visible], b[visible]
+
+        rows = np.concatenate((zone[first], zone[second])).astype(int)
+        cols = np.concatenate((zone[second], zone[first])).astype(int)
+        r = np.concatenate((b - a, a - b))
+        distance_squared = np.sum(r**2, axis=1)
+        angles = np.arctan2(r[:, 1], r[:, 0])
+        material = self.materials[self.material_map[self.ny//2, column]]
+        speed_squared = self.wavespeed_squared_for(
+            material, self.property_map[self.ny//2, column], angles)
+        return rows, cols, (distance_squared/speed_squared)**0.5
+
     def set_up_graph(self) -> None:
         rows = []
         cols = []
@@ -1521,7 +1605,7 @@ class SimplRectGrid(_ModeDependentMaterial):
             # discard every point), and there is no meaningful "other side"
             # to exclude for a pixel sitting on the plane itself anyway.
             if self.image_grid_trim[pixel, 1] != 0:
-                points = points[self.grid[points, 1]*self.image_grid_trim[pixel, 1] > 0]
+                points = points[self.grid[points, 1]*self.image_grid_trim[pixel, 1] >= 0]
             points = points[np.lexsort(np.round(GRID_DEDUP_ROUND_SCALE*self.grid[points]).T)]
             if len(points) < 2:
                 single_counter += 1
@@ -1564,7 +1648,10 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.left_iso_rows, self.left_iso_cols = [], []
         self.left_iso_edges = []
         # Add left homogeneous zone
-        if self.left_iso_zone is not None:
+        if self.left_iso_zone is not None and self._visible_zone_edges_wanted():
+            (self.left_iso_rows, self.left_iso_cols,
+             self.left_iso_edges) = self._visible_zone_edges('left')
+        elif self.left_iso_zone is not None:
             # Go through possible connections; first top chamfer vs bottom chamfer (assumes
             # pulse echo)
             cham_x = self.grid[self.left_iso_chamfer, 0]
@@ -1658,7 +1745,10 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.right_iso_rows, self.right_iso_cols = [], []
         self.right_iso_edges = []
         # Add right homogeneous zone
-        if self.right_iso_zone is not None:
+        if self.right_iso_zone is not None and self._visible_zone_edges_wanted():
+            (self.right_iso_rows, self.right_iso_cols,
+             self.right_iso_edges) = self._visible_zone_edges('right')
+        elif self.right_iso_zone is not None:
             # Go through possible connections; first top chamfer vs bottom chamfer (assumes
             # pulse echo)
             cham_x = self.grid[self.right_iso_chamfer, 0]
