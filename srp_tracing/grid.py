@@ -1514,8 +1514,10 @@ class SimplRectGrid(_ModeDependentMaterial):
                             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Straight-ray edges of the isotropic parent zone on one side ('left' or
-        'right') of a domain that is *not* mirrored about the backwall (the
-        real domain, with a relay, or transducers on both surfaces).
+        'right') of the weld, in any domain: the real domain (with a relay, or
+        transducers on both surfaces) or one mirrored about the backwall (where
+        the outline has a top and a mirrored bottom half, and the zone is the
+        region to one side of it).
 
         The zone is made of the nodes of the outline (left/right_iso_chamfer,
         one polyline from the top of the weld to its root) and of the added
