@@ -54,6 +54,7 @@ GRID_DEDUP_TOL = 1e-10
 # boundary lies exactly on an interpolated ray between two other boundary
 # points (SimplRectGrid's isotropic-zone edge wiring).
 CHAMFER_BOUNDARY_MATCH_TOL = 1e-8
+BACKWALL_TOL = 1e-9              # a node this far under the backwall profile still counts as on it
 
 
 def voronoi_finite_polygons_2d(vor: Voronoi,
@@ -178,6 +179,28 @@ def dedup_min_edge_indices(rows: np.ndarray, cols: np.ndarray,
     is_new_pair = np.ones(len(sorted_rows), dtype=bool)
     is_new_pair[1:] = (sorted_rows[1:] != sorted_rows[:-1]) | (sorted_cols[1:] != sorted_cols[:-1])
     return sorted_rows[is_new_pair], sorted_cols[is_new_pair], order[is_new_pair]
+
+
+def prepare_backwall_profile(profile: np.ndarray) -> np.ndarray:
+    """
+    A backwall profile as an (n, 2) array of (x, y) points sorted by x, the
+    plate lying above it (y >= profile height): the lower surface of the plate
+    (not necessarily flat: a recess, a machined step, a measured surface).
+    Points with the same x are not allowed.
+    """
+    profile = np.asarray(profile, dtype=float)
+    if profile.ndim != 2 or profile.shape[1] != 2 or len(profile) < 2:
+        raise ValueError('a backwall profile is an (n >= 2, 2) array of x, y')
+    profile = profile[np.argsort(profile[:, 0], kind='stable')]
+    if np.any(np.diff(profile[:, 0]) <= 0):
+        raise ValueError('the x of a backwall profile must be strictly '
+                         'increasing (one height per x)')
+    return profile
+
+
+def backwall_height(profile: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Height of the backwall profile at x (constant beyond its ends)."""
+    return np.interp(x, profile[:, 0], profile[:, 1])
 
 
 def build_edge_matrix(rows: np.ndarray, cols: np.ndarray,
@@ -652,6 +675,25 @@ class RectGrid(_ModeDependentMaterial):
         changes = np.diff(sorted_grid, axis=0)
         self.grid_1 = np.vstack((sorted_grid[0], sorted_grid[1:][
             ~(abs(changes) < GRID_DEDUP_TOL).all(axis=1)]))
+
+    def trim_to_backwall(self, profile: np.ndarray) -> None:
+        """
+        Restricts the domain to the plate above a backwall profile that is not
+        flat: the nodes below the profile are removed, so that the pixels the
+        profile cuts keep only their nodes above it. The points of the
+        backwall itself are added as the targets of add_points (a backwall
+        relay: see solver.combine_via_boundary). Call it before add_points.
+
+        Parameters:
+        ---
+        profile: ndarray (n, 2), the (x, y) of the lower surface of the plate,
+                 x strictly increasing; the domain must cover it, and the
+                 plate lies above it
+        """
+        self.backwall_profile = prepare_backwall_profile(profile)
+        keep = self.grid_1[:, 1] >= backwall_height(
+            self.backwall_profile, self.grid_1[:, 0]) - BACKWALL_TOL
+        self.grid_1 = self.grid_1[keep]
 
     def assign_materials(self, material_map: np.ndarray, materials: dict,
                          left_add: Optional[int] = None,
@@ -1264,8 +1306,27 @@ class SimplRectGrid(_ModeDependentMaterial):
         row_mask = np.append([True], np.any(changes, axis=1))
         self.grid_1 = sorted_grid[row_mask]
 
+    def _apply_backwall(self, backwall: Optional[np.ndarray],
+                        mirror_domain: bool) -> None:
+        """Stores the backwall profile (or None) for the trim in progress."""
+        if backwall is not None and mirror_domain:
+            raise ValueError('a backwall profile needs the real domain: '
+                             'mirror_domain must be False (use the backwall '
+                             'relay)')
+        self.backwall_profile = (None if backwall is None
+                                 else prepare_backwall_profile(backwall))
+
+    def _above_backwall(self, points: np.ndarray) -> np.ndarray:
+        """Boolean mask of the points on or above the backwall profile."""
+        if getattr(self, 'backwall_profile', None) is None:
+            return np.ones(len(points), dtype=bool)
+        return points[:, 1] >= backwall_height(
+            self.backwall_profile, points[:, 0]) - BACKWALL_TOL
+
     def trim_to_chamfer(self, a: float, b: float, c: float,
-                        mirror_domain: bool = False) -> None:
+                        mirror_domain: bool = False,
+                        backwall: Optional[np.ndarray] = None) -> None:
+        self._apply_backwall(backwall, mirror_domain)
         self.a, self.b, self.c = a, b, c
         points_x = np.array([-c/2, -b/2, b/2, c/2])
         points_y = np.array([a, 0, 0, a])
@@ -1290,7 +1351,7 @@ class SimplRectGrid(_ModeDependentMaterial):
                            > np.tan(np.pi/2 + weld_angle)*(self.grid_1[:, 0] + b/2))
             take_right = (abs(self.grid_1[:, 1]) + node_spacing*1e-6
                            > np.tan(np.pi/2 - weld_angle)*(self.grid_1[:, 0] - b/2))
-        take = take_left & take_right
+        take = take_left & take_right & self._above_backwall(self.grid_1)
         first_new_idx = self.grid_1[take].shape[0]
         if not mirror_domain:
             self.grid_1 = np.concatenate((self.grid_1[take], np.column_stack((seed_x, seed_y)),
@@ -1309,7 +1370,25 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.mirror_domain = mirror_domain
     
     def trim_to_weld(self, weld_outline: np.ndarray, mirror_domain: bool = False,
-                     seeds_vs_node_sp: float = 0.25) -> None:
+                     seeds_vs_node_sp: float = 0.25,
+                     backwall: Optional[np.ndarray] = None) -> None:
+        """
+        Trims the grid to the weld outline (the parent metal on each side is a
+        straight-ray zone).
+
+        backwall: optional (n, 2) array, the profile of a backwall that is not
+            flat (see prepare_backwall_profile): the nodes below it are
+            removed, and the chords of the zones stay above it. It needs the
+            real domain (mirror_domain False), where the backwall is handled
+            as a relay: the points of the profile are the targets of
+            add_points.
+        """
+        self._apply_backwall(backwall, mirror_domain)
+        if self.backwall_profile is not None and np.any(
+                weld_outline[:, 1] < backwall_height(
+                    self.backwall_profile, weld_outline[:, 0]) - 1e-6):
+            raise ValueError('the weld outline must lie on or above the '
+                             'backwall profile')
         self.trimmed_by_outline = True
         self.mirror_domain = mirror_domain
         self.weld_outline = weld_outline
@@ -1338,6 +1417,7 @@ class SimplRectGrid(_ModeDependentMaterial):
                            > self.weld_outline_int(self.grid_1[:, 0]))
                     & (self.grid_1[:, 0] >= weld_outline.min(axis=0)[0])
                     & (self.grid_1[:, 0] <= weld_outline.max(axis=0)[0]))
+        take &= self._above_backwall(self.grid_1)
         first_new_idx = self.grid_1[take].shape[0]
         if not mirror_domain:
             self.grid_1 = np.concatenate((self.grid_1[take], np.column_stack((seed_x, seed_y))), axis=0)
@@ -1460,11 +1540,12 @@ class SimplRectGrid(_ModeDependentMaterial):
             # horizontal extent of the outline or below the outline, i.e. in
             # the parent metal under a flank (like the chamfer test above; a
             # point of the backwall in a relay is such a point)
+            height = (lambda y: y) if not self.mirror_domain else abs
             take_neg = ((self.grid[add_neg, 0] < self.weld_outline[0, 0])
-                        | (abs(self.grid[add_neg, 1])
+                        | (height(self.grid[add_neg, 1])
                            < self.weld_outline_int(self.grid[add_neg, 0])))
             take_pos = ((self.grid[add_pos, 0] > self.weld_outline[-1, 0])
-                        | (abs(self.grid[add_pos, 1])
+                        | (height(self.grid[add_pos, 1])
                            < self.weld_outline_int(self.grid[add_pos, 0])))
 
         self.left_iso_chamfer = np.copy(self.left_iso_zone)
@@ -1509,6 +1590,34 @@ class SimplRectGrid(_ModeDependentMaterial):
         if mode == 'mirrored' and not self.mirror_domain:
             raise ValueError("zone_edges = 'mirrored' needs a mirrored domain")
         return mode == 'visible'
+
+    @staticmethod
+    def _above_profile(a: np.ndarray, b: np.ndarray, profile: np.ndarray,
+                       chunk: int = 4000) -> np.ndarray:
+        """
+        For the segments from a[i] to b[i] (arrays (n, 2)): whether each stays
+        on or above the backwall profile (a polyline, so it is enough to look
+        at the vertices of the profile that lie under the segment's x-range).
+        """
+        ok = np.ones(len(a), dtype=bool)
+        px, py = profile[:, 0], profile[:, 1]
+        for start in range(0, len(a), chunk):
+            sl = slice(start, start + chunk)
+            xa, ya, xb, yb = a[sl, 0:1], a[sl, 1:2], b[sl, 0:1], b[sl, 1:2]
+            lo, hi = np.minimum(xa, xb), np.maximum(xa, xb)
+            under = (px[None, :] >= lo) & (px[None, :] <= hi)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                along = np.where(xb != xa, (px[None, :] - xa)/(xb - xa), 0.)
+            chord_y = ya + along*(yb - ya)
+            # a chord may touch the profile (points on it), not go below it
+            below = under & (chord_y < py[None, :] - BACKWALL_TOL)
+            # vertical chords: the lower end must not be below the profile
+            vertical = xa == xb
+            if vertical.any():
+                low = np.minimum(ya, yb)
+                below |= vertical & (low < np.interp(xa, px, py) - BACKWALL_TOL)
+            ok[sl] = ~below.any(axis=1)
+        return ok
 
     def _visible_zone_edges(self, side: str
                             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1562,6 +1671,9 @@ class SimplRectGrid(_ModeDependentMaterial):
         within = (along >= -1e-9) & (along <= 1 + 1e-9) & (dy[:, None] != 0)
         beyond = beyond_sign*(chord_x - vertex_x[None, :]) > CHAMFER_BOUNDARY_MATCH_TOL
         visible = ~(within & beyond).any(axis=1)
+        profile = getattr(self, 'backwall_profile', None)
+        if profile is not None:
+            visible &= self._above_profile(a, b, profile)
         first, second, a, b = first[visible], second[visible], a[visible], b[visible]
 
         rows = np.concatenate((zone[first], zone[second])).astype(int)
