@@ -1491,22 +1491,23 @@ class SimplRectGrid(_ModeDependentMaterial):
 
     def _visible_zone_edges_wanted(self) -> bool:
         """
-        Whether set_up_graph builds the zone edges with _visible_zone_edges().
-        The attribute zone_edges says: 'visible' (always) or 'mirrored' (the
-        rule written for a domain mirrored about the backwall: top and bottom
-        halves of the outline, no chords between nodes of the outline on the
-        same side). Unset, a mirrored domain keeps its own rule and any other
-        domain uses 'visible', the only one that can work there. 'visible'
-        gives, in a mirrored domain too, the same times as calculate_graph()
-        (the chords that calculate_graph() adds across the weld never
-        matter), where the mirrored rule differs by up to ~0.06 us on the
-        EDF weld.
+        Whether set_up_graph builds the zone edges with _visible_zone_edges()
+        (the default, in every domain) or with the rule written for a domain
+        mirrored about the backwall (top and bottom halves of the outline, no
+        chords between nodes of the outline on the same side), which the
+        attribute zone_edges = 'mirrored' selects and which only works in a
+        mirrored domain. The general rule gives the same times as
+        calculate_graph() (the chords that calculate_graph() adds across the
+        weld never matter); the mirrored rule leaves out the chords between
+        outline nodes and differs from it by up to ~0.06 us on the EDF weld.
         """
         mode = getattr(self, 'zone_edges', None)
         if mode is None:
-            return not self.mirror_domain
+            return True
         if mode not in ('visible', 'mirrored'):
             raise ValueError("zone_edges must be 'visible' or 'mirrored'")
+        if mode == 'mirrored' and not self.mirror_domain:
+            raise ValueError("zone_edges = 'mirrored' needs a mirrored domain")
         return mode == 'visible'
 
     def _visible_zone_edges(self, side: str

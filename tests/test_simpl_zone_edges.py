@@ -112,9 +112,7 @@ def test_zone_edges_never_cross_the_outline_and_are_not_repeated(
         assert np.all(sign*(x[inside_range] - boundary) <= 1e-6), (i, j)
 
 
-def test_mirrored_domains_keep_their_own_zone_edges(isotropic_material):
-    """The mirrored domain has both halves of the outline; it does not take
-    the general route (its graph is pinned by the validation tests)."""
+def _mirrored_times(isotropic_material, how):
     material = isotropic_material(vp=VP)
     weld_mask = np.zeros((int(THICKNESS/PIXEL), NX))
     weld_mask[:, PAD + 2:NX - PAD - 2] = 1
@@ -130,46 +128,38 @@ def test_mirrored_domains_keep_their_own_zone_edges(isotropic_material):
     g.add_points(points=np.r_[sources, targets],
                  sources=np.arange(len(sources)),
                  targets=np.arange(len(sources), 2*len(sources)))
-    assert g.mirror_domain is True
-    g.set_up_graph()
-    g.update_edges()
-    assert g.edges.nnz > 0
-
-
-def test_visible_zone_edges_make_the_mirrored_fast_update_equal_the_rebuild(
-        isotropic_material):
-    """Also in the mirrored domain the general rule reproduces
-    calculate_graph(); the mirrored rule (the default there) leaves out the
-    chords between outline nodes and so differs from it (by up to 0.06 us on
-    the EDF weld)."""
-    material = isotropic_material(vp=VP)
-    weld_mask = np.zeros((int(THICKNESS/PIXEL), NX))
-    weld_mask[:, PAD + 2:NX - PAD - 2] = 1
-    mask = np.vstack((weld_mask[::-1], weld_mask))
-    elements = np.arange(-8., 8.1, 2.)
-    sources = np.c_[elements, np.full(len(elements), THICKNESS)]
-    targets = np.c_[elements, np.full(len(elements), -THICKNESS)]
-
-    def times(how):
-        g = grid.SimplRectGrid(NX, mask.shape[0], 0., 0., PIXEL, 8)
-        g.assign_model(mode='orientations', property_map=np.zeros(mask.shape))
-        g.assign_materials(mask, {0: material, 1: material})
-        g.trim_to_weld(OUTLINE, mirror_domain=True)
-        g.simplify_grid(left_add=PAD, right_add=PAD)
-        g.add_points(points=np.r_[sources, targets],
-                     sources=np.arange(len(sources)),
-                     targets=np.arange(len(sources), 2*len(sources)))
-        if how == 'rebuild':
-            g.calculate_graph()
-        else:
+    if how == 'rebuild':
+        g.calculate_graph()
+    else:
+        if how != 'default':
             g.zone_edges = how
-            g.set_up_graph()
-            g.update_edges()
-        s = solver.Solver(g)
-        s.solve(source_indices=g.source_idx)
-        return s.tfs[:, g.target_idx]
+        g.set_up_graph()
+        g.update_edges()
+    s = solver.Solver(g)
+    s.solve(source_indices=g.source_idx)
+    return s.tfs[:, g.target_idx]
 
-    rebuilt = times('rebuild')
-    np.testing.assert_allclose(times('visible'), rebuilt, rtol=1e-6)
+
+def test_the_general_rule_is_the_default_in_a_mirrored_domain_too(
+        isotropic_material):
+    """Also in the mirrored domain the fast update reproduces calculate_graph()
+    with the default rule; the mirrored rule (zone_edges = 'mirrored') leaves
+    out the chords between outline nodes and can be longer (by up to 0.06 us
+    on the EDF weld)."""
+    rebuilt = _mirrored_times(isotropic_material, 'rebuild')
+    np.testing.assert_allclose(_mirrored_times(isotropic_material, 'default'),
+                               rebuilt, rtol=1e-6)
+    np.testing.assert_allclose(_mirrored_times(isotropic_material, 'visible'),
+                               rebuilt, rtol=1e-6)
+    legacy = _mirrored_times(isotropic_material, 'mirrored')
+    assert np.all(np.isfinite(legacy))
+    assert np.all(legacy >= rebuilt - 1e-9)      # never shorter than the exact chords
+
+
+def test_zone_edges_option_is_checked(isotropic_material):
     with pytest.raises(ValueError, match='zone_edges'):
-        times('other')
+        _mirrored_times(isotropic_material, 'other')
+    g = _relay_grid(isotropic_material, np.arange(-8., 8.1, 1.))
+    g.zone_edges = 'mirrored'
+    with pytest.raises(ValueError, match='mirrored domain'):
+        g.set_up_graph()
