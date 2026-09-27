@@ -133,3 +133,25 @@ def test_profile_and_geometry_are_checked(isotropic_material):
     g = grid.SimplRectGrid(32, 9, 0., 4.5, 1., 4)
     with pytest.raises(ValueError, match='outline'):
         g.trim_to_weld(np.array([[-6., 9.], [0., 0.], [6., 9.]]), backwall=profile)
+
+
+def test_pixels_wholly_under_the_profile_are_left_out(isotropic_material):
+    """A profile so raised that it covers whole pixels of the weld's grid (no node is left in them): set_up_graph
+    (which the fast edge update needs) copes with the empty pixels. Before, it indexed with an empty float array."""
+    material = isotropic_material(vp=VP)
+    nx, ny, pixel = 32, 9, 1.
+    outline = np.array([[-6., 9.], [-3., 6.], [0., 3.5], [3., 6.], [6., 9.]])
+    profile = recess_profile(flat=3., half_flat=30., half_base=31., half_width=15.5, step=0.25)
+    weld_mask = np.zeros((ny, nx))
+    weld_mask[:, 10:22] = 1
+    sources = np.c_[np.arange(-8., 8.1, 1.), np.full(17, 9.)]
+    g = grid.SimplRectGrid(nx, ny, 0., ny*pixel/2, pixel, 8)
+    g.assign_model(mode='orientations', property_map=np.zeros((ny, nx)))
+    g.assign_materials(weld_mask, {0: material, 1: material})
+    g.trim_to_weld(outline, mirror_domain=False, backwall=profile)
+    g.simplify_grid(left_add=8, right_add=8)
+    g.add_points(points=np.r_[sources, profile], sources=np.arange(len(sources)),
+                 targets=np.arange(len(sources), len(sources) + len(profile)))
+    g.set_up_graph()
+    g.update_edges()
+    assert g.edges.nnz > 0

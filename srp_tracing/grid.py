@@ -773,7 +773,7 @@ class RectGrid(_ModeDependentMaterial):
             # In case the search circle went outside the pixel, filter out
             take = (abs(self.grid[points] - self.image_grid[pixel])
                     <= self.pixel_size/2*PIXEL_BOUNDARY_TOL_FACTOR).all(axis=1)
-            points = np.array(points)[take]
+            points = np.array(points, dtype=int)[take]
             if len(points) < 2:
                 continue
             
@@ -913,7 +913,7 @@ class RectGrid(_ModeDependentMaterial):
             # In case the search circle went outside the pixel, filter out
             take = (abs(self.grid[points] - self.image_grid[pixel])
                     <= self.pixel_size/2*PIXEL_BOUNDARY_TOL_FACTOR).all(axis=1)
-            points = np.array(points)[take]
+            points = np.array(points, dtype=int)[take]
             this_material = self.materials[self.material_map.flatten()[pixel]]
             rows_local, cols_local, edges_local, _, _ = self.connect_all_pairs(
                 points, this_material, self.property_map.flatten()[pixel])
@@ -1710,7 +1710,7 @@ class SimplRectGrid(_ModeDependentMaterial):
             # In case the search circle went outside the pixel, filter out
             take = (abs(self.grid[points] - self.image_grid_trim[pixel])
                     <= self.pixel_size/2*PIXEL_BOUNDARY_TOL_FACTOR).all(axis=1)
-            points = np.array(points)[take]
+            points = np.array(points, dtype=int)[take]
             # Restrict to points on the same side of the mirror plane (y=0)
             # as this pixel, so a point from the mirrored half-domain that
             # happens to be geometrically close isn't picked up. Guarded
