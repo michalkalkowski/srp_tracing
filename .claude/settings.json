@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Apps/Anaconda3/python.exe\" -m pytest tests/ -q)",
+      "Bash(\"/c/Apps/Anaconda3/python.exe\" -m pytest tests/ -v)"
+    ]
+  }
+}

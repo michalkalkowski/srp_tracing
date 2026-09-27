@@ -113,3 +113,34 @@ def test_simpl_rect_grid_calculate_graph_mismatched_tie_link_raises(isotropic_ma
     g = _small_simpl_rect_grid(isotropic_material)
     with pytest.raises(ValueError):
         g.calculate_graph(tie_link=[[g.source_idx[0]], [g.target_idx[0], g.target_idx[0]]])
+
+
+def test_simpl_rect_grid_add_points_with_no_point_in_a_parent_zone(isotropic_material):
+    """
+    Regression: add_points's per-side mask_receiver list defaulted to float64 when empty (no added point at
+    all fell in that side's parent-metal zone -- e.g. every source and target sits inside the weld itself, as
+    a TFM delay law's array and region-of-interest points typically do), and ~ on a float array raised
+    TypeError. Both sides empty here: source and target are placed well inside the chamfer, away from both
+    flanks.
+    """
+    a, b, c = 10.0, 2.0, 14.0
+    dx = 2.0
+    nx, ny = 8, 6
+    cx, cy = 0.0, a/2
+    material_map = np.zeros((ny, nx), dtype=int)
+    material_map[:, nx//2 - 1: nx//2 + 1] = 1
+    property_map = np.zeros((ny, nx))
+    material = isotropic_material(vp=2.0)
+
+    g = grid.SimplRectGrid(nx=nx, ny=ny, cx=cx, cy=cy, pixel_size=dx, no_seeds=4)
+    g.assign_model(mode="orientations", property_map=property_map)
+    g.assign_materials(material_map, {0: material, 1: material})
+    g.trim_to_chamfer(a, b, c)
+    g.simplify_grid()
+
+    points = np.array([[-0.5, 3.0], [0.5, 6.0]])   # both inside the weld, neither iso zone
+    g.add_points(points=points, sources=np.array([0]), targets=np.array([1]))
+    g.calculate_graph()
+    s = solver.Solver(g)
+    s.solve(source_indices=g.source_idx)
+    assert np.isfinite(s.tfs[0, g.target_idx[0]])

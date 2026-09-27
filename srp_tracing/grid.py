@@ -1571,14 +1571,17 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.right_iso_zone = np.append(self.right_iso_zone,
                                        add_pos[take_pos])
 
-        mask_receiver = [self.left_iso_trans[ix] in self.target_idx
-                         for ix in range(len(self.left_iso_trans))]
+        # dtype=bool: an empty list defaults to float64, and ~ on that raises (no points of this
+        # side happened to land in the parent-metal zone -- e.g. an array no wider than the weld's
+        # own opening, with no backwall points added, as in a direct TFM delay law)
+        mask_receiver = np.array([self.left_iso_trans[ix] in self.target_idx
+                                  for ix in range(len(self.left_iso_trans))], dtype=bool)
         self.left_iso_targets = self.left_iso_trans[mask_receiver]
-        self.left_iso_sources = self.left_iso_trans[~np.array(mask_receiver)]
-        mask_receiver = [self.right_iso_trans[ix] in self.target_idx
-                         for ix in range(len(self.right_iso_trans))]
+        self.left_iso_sources = self.left_iso_trans[~mask_receiver]
+        mask_receiver = np.array([self.right_iso_trans[ix] in self.target_idx
+                                  for ix in range(len(self.right_iso_trans))], dtype=bool)
         self.right_iso_targets = self.right_iso_trans[mask_receiver]
-        self.right_iso_sources = self.right_iso_trans[~np.array(mask_receiver)]
+        self.right_iso_sources = self.right_iso_trans[~mask_receiver]
         self.left_iso_nodes = np.array(list(set(self.left_iso_zone)
                                             - set(self.left_iso_targets)))
         self.right_iso_nodes = np.array(list(set(self.right_iso_zone)
