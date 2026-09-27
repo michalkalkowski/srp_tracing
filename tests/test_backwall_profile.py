@@ -155,3 +155,17 @@ def test_pixels_wholly_under_the_profile_are_left_out(isotropic_material):
     g.set_up_graph()
     g.update_edges()
     assert g.edges.nnz > 0
+
+
+def test_backwall_from_vertices_samples_the_polyline_and_keeps_the_vertices():
+    vertices = np.array([[-10., 0.], [-4., 0.], [-2.6, 1.5], [2.6, 1.5], [4., 0.], [10., 0.]])
+    profile = grid.backwall_from_vertices(vertices, 0.25)
+    assert np.all(np.diff(profile[:, 0]) > 0) and np.max(np.diff(profile[:, 0])) <= 0.25 + 1e-12
+    for vertex in vertices:                     # every vertex is a point of the profile
+        assert np.any(np.all(np.isclose(profile, vertex), axis=1))
+    np.testing.assert_allclose(profile[:, 1], np.interp(profile[:, 0], vertices[:, 0], vertices[:, 1]))
+    # unsorted input is sorted, repeated x refused
+    shuffled = grid.backwall_from_vertices(vertices[::-1], 0.5)
+    assert shuffled[0, 0] == -10. and shuffled[-1, 0] == 10.
+    with pytest.raises(ValueError, match='strictly'):
+        grid.backwall_from_vertices(np.array([[0., 0.], [0., 1.], [1., 1.]]), 0.25)

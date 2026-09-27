@@ -198,6 +198,20 @@ def prepare_backwall_profile(profile: np.ndarray) -> np.ndarray:
     return profile
 
 
+def backwall_from_vertices(vertices: np.ndarray, step: float) -> np.ndarray:
+    """
+    A backwall profile from a few vertices (a floor, the foot and the top of the
+    shoulders of a recess, ...): the polyline through them, sampled every `step`
+    (mm) and at every vertex, ready for trim_to_weld(backwall=...) and as the
+    targets of a backwall relay (whose accuracy is set by the spacing of these
+    points along the profile, so `step` should be well below the pixel size).
+    """
+    vertices = prepare_backwall_profile(vertices)
+    x = np.unique(np.r_[np.arange(vertices[0, 0], vertices[-1, 0] + step/2, step),
+                        vertices[:, 0]])
+    return np.c_[x, np.interp(x, vertices[:, 0], vertices[:, 1])]
+
+
 def backwall_height(profile: np.ndarray, x: np.ndarray) -> np.ndarray:
     """Height of the backwall profile at x (constant beyond its ends)."""
     return np.interp(x, profile[:, 0], profile[:, 1])
