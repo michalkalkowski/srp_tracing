@@ -19,8 +19,12 @@ dependencies:
   # used by examples/ and tests/test_*_validation.py. Paths are relative
   # to the directory `conda env create -f environment.yml` is run from
   # (this repo's root), and assume the sibling layout this repo has always
-  # used: srp_tracing/, ogilvy_weld/, and mina_weld/ under the same parent
-  # directory.
+  # used: srp_tracing/, ogilvy_weld/, mina_weld/, and gen_ogilvy/ under the
+  # same parent directory.
   - -e ../ogilvy_weld
   - -e ../mina_weld
+  # gen_ogilvy.multi_weld.MultiVWeld/WeldLevel: the multi-level (double/
+  # triple-V) generalisation of ogilvy_weld's single-chamfer model, used
+  # by examples/test_ogilvy_triple_v.py.
+  - -e ../gen_ogilvy
 
