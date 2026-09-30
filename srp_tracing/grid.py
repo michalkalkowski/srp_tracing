@@ -1384,7 +1384,7 @@ class SimplRectGrid(_ModeDependentMaterial):
         self.mirror_domain = mirror_domain
     
     def trim_to_weld(self, weld_outline: np.ndarray, mirror_domain: bool = False,
-                     seeds_vs_node_sp: float = 0.25,
+                     seeds_vs_node_sp: float = 1.0,
                      backwall: Optional[np.ndarray] = None) -> None:
         """
         Trims the grid to the weld outline (the parent metal on each side is a
@@ -1396,6 +1396,18 @@ class SimplRectGrid(_ModeDependentMaterial):
             real domain (mirror_domain False), where the backwall is handled
             as a relay: the points of the profile are the targets of
             add_points.
+        seeds_vs_node_sp: float, chamfer seed spacing relative to the
+            standard (pixel-boundary) seed spacing, node_spacing =
+            pixel_size/no_seeds -- 1.0 (default) places chamfer seeds
+            node_spacing apart, matching the standard seeds' density;
+            values below/above 1 give sparser/denser chamfer seeding.
+            Spacing is measured along the outline's own arc length, one
+            straight run of seeds per outline segment, not by evenly
+            dividing x across the whole (possibly multi-bevel, unevenly
+            sloped) outline -- the latter over-seeds shallow segments and
+            under-seeds steep ones whenever the outline has more than one
+            slope (see WeldLevel/MultiVWeld in gen_ogilvy for how a
+            multi-level outline like a triple-V is built).
         """
         self._apply_backwall(backwall, mirror_domain)
         if self.backwall_profile is not None and np.any(
@@ -1413,14 +1425,28 @@ class SimplRectGrid(_ModeDependentMaterial):
                                        bounds_error=False)
         left_chamfer = weld_outline[:weld_centre + 1]
         node_spacing = self.pixel_size/self.no_seeds
-        # total length of the weld outline
-        total_length = np.linalg.norm(np.diff(weld_outline, axis=0), axis=1).sum()
+        # Arc length along the outline (one straight run per segment), not x:
+        # the outline can have more than one slope (a multi-level/triple-V
+        # weld, or any real fitted profile), and evenly dividing x across the
+        # whole thing distributes seeds unevenly in *distance* -- too many on
+        # shallow segments, too few on steep ones -- even though each segment
+        # individually is straight. Walking arc length instead gives every
+        # segment the same seed spacing regardless of its own slope.
+        seg_vec = np.diff(weld_outline, axis=0)
+        seg_len = np.linalg.norm(seg_vec, axis=1)
+        cum_len = np.concatenate(([0.], np.cumsum(seg_len)))
+        total_length = cum_len[-1]
         seeds_per_chamfer = int(total_length/node_spacing*seeds_vs_node_sp)
-        seed_x = np.linspace(weld_outline[0, 0], weld_outline[-1, 0],
-                             seeds_per_chamfer + 1)
+        seed_s = np.linspace(0., total_length, seeds_per_chamfer + 1)
+        # which segment each seed falls in (clip handles the s == total_length
+        # endpoint, which searchsorted would otherwise place one past the end)
+        seg_idx = np.clip(np.searchsorted(cum_len, seed_s, side='right') - 1,
+                          0, len(seg_len) - 1)
+        local_t = (seed_s - cum_len[seg_idx])/seg_len[seg_idx]
+        seed_x = weld_outline[seg_idx, 0] + local_t*seg_vec[seg_idx, 0]
+        seed_y = weld_outline[seg_idx, 1] + local_t*seg_vec[seg_idx, 1]
         left_chamfer_seeds = sum(seed_x < weld_outline[weld_centre, 0])
         right_chamfer_seeds = sum(seed_x >= weld_outline[weld_centre, 0])
-        seed_y = self.weld_outline_int(seed_x)
         if not mirror_domain:
             take = ((self.grid_1[:, 1] + node_spacing*1e-6
                          > self.weld_outline_int(self.grid_1[:, 0]))
